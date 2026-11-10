@@ -1,0 +1,25 @@
+[package]
+name = "sfm2mesh"
+version = "0.1.0"
+edition = "2021"
+description = "Monocular video -> sparse SfM -> dense MVS -> simplified textured mesh"
+publish = false
+
+[dependencies]
+argh = "0.1"
+cudarc = "0.19"
+kiddo = "5.3"
+kornia-3d = { path = "../kornia-rs/crates/kornia-3d" }
+kornia-algebra = { path = "../kornia-rs/crates/kornia-algebra" }
+kornia-calib = { path = "../kornia-rs/crates/kornia-calib" }
+kornia-image = { path = "../kornia-rs/crates/kornia-image", features = ["cuda"] }
+kornia-imgproc = { path = "../kornia-rs/crates/kornia-imgproc", features = ["cuda"] }
+kornia-io = { path = "../kornia-rs/crates/kornia-io", features = ["gstreamer"] }
+rayon = "1.12"
+
+[dev-dependencies]
+tempfile = "3.27"
+
+# NOTE: path dependencies point at the local kornia-rs checkout (branch
+# `semproj/sfm2mesh`). For a reproducible hand-in, replace each with:
+#   kornia-3d = { git = "https://github.com/AdarshGuptaa/kornia-rs.git", branch = "semproj/sfm2mesh" }
