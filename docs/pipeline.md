@@ -236,21 +236,80 @@ Binary little-endian PLY, 27 bytes/vertex: `x y z` (f32), `red green blue`
 
 ---
 
-## 7. What comes next (dense → mesh)
+## 7. Dense depth → solid mesh
 
 The sparse cloud only has points where SIFT fired. The dense stage reuses the
-recovered poses and adds per-pixel depth:
+recovered poses and adds per-pixel depth, then turns depth into a surface.
 
-1. **Plane sweep**: for a reference view, hypothesize inverse-depth planes
-   along each ray; warp neighbour views with the induced homography; score
-   photoconsistency (NCC) in a window; per-pixel winner-takes-all, then a
-   left-right consistency check.
-2. **TSDF fusion**: integrate depth maps into a truncated signed distance field
-   on `kornia_3d::voxel::VoxelGrid` (hash of integer voxel keys).
-3. **Marching cubes**: extract the zero-level-set triangle mesh from the TSDF.
-4. **Simplification**: quadric edge collapse to a target face budget.
-5. **Attributes**: normals from the TSDF gradient, colours by projecting vertices
-   into the source frames.
+### 7a. Plane sweep — `src/dense.rs`
+
+For a reference view `r` and a neighbour `n`, the relative motion is
+
+```
+X_n = R · X_r + t        R = R_nᵀ R_r,  t = R_nᵀ (c_r − c_n)
+```
+
+with `c` the camera centres (`T_world_cam` translations). A fronto-parallel
+plane at depth `d` in `r` induces the homography
+
+```
+H(d) = K_n (R + (t e₃ᵀ) / d) K_r⁻¹          (e₃ = (0,0,1))
+```
+
+We sweep **inverse depth** `ρ = 1/d` (uniform sampling in disparity, like a
+focus ring) over a range taken from the sparse points' depths. For every pixel
+and every plane, warp the neighbour and score a 5×5 normalized
+cross-correlation; winner-takes-all gives the depth, `NCC < 0.4` rejects flat
+or ambiguous patches.
+
+**Left-right check**: backproject the winning depth, project it into the
+neighbour, and require the neighbour's own estimate to agree within 5 %.
+This removes occluded/grazing pixels that photo-consistency alone accepts.
+
+### 7b. TSDF fusion — `src/tsdf.rs`
+
+Each depth pixel votes on the ray: in front of the measured surface is empty
+(`+`), behind it is solid (`−`), with
+
+```
+sdf(v) = weighted mean of  (depth − v_z) / trunc
+```
+
+truncated to ±1 and only accumulated within `trunc` of a measurement. The
+grid covers the dense cloud's bounding box at `--voxel-resolution` points along
+its longest axis. Unobserved voxels keep weight 0.
+
+Two practical lessons learned the hard way:
+
+- the truncation band must be wider than the depth noise, or views disagree and
+  the surface averages away (the default is 3 voxels at 256 resolution);
+- meshing must only use cells whose **eight corners are observed** — treating
+  unobserved corners as "empty" invents a surface at the inner edge of the band.
+
+### 7c. Marching tetrahedra — `src/mesh.rs`
+
+Each cube is split into six tetrahedra sharing body diagonal 0–7. A tetrahedron
+has only three crossing patterns (1-in/3-out, 2-in/2-out, 3-in/1-out), so no
+256-entry table is needed. The 2-in/2-out case produces a quad whose vertices
+**must be traversed cyclically** — in edge-list order it bowties and leaves the
+mesh open. Vertices are welded by quantized position; each triangle's winding
+is fixed against the TSDF gradient so normals point outward.
+
+### 7d. Cleanup and simplification — `src/mesh.rs`, `src/simplify.rs`
+
+Photogrammetry produces small floating fragments; connected patches below
+`--min-component-faces` are removed. The remaining mesh is simplified with
+**quadric error metrics**: each vertex accumulates `Q = Σ plane quadrics`, an
+edge collapse costs `xᵀA x + 2bᵀx + c` at the optimal merged position, and a
+heap removes the cheapest shape change first. The link condition and a
+normal-flip check keep the result manifold and fold-free.
+
+### 7e. Attributes — `src/mesh.rs`
+
+- **Normals** = normalized TSDF gradient at the vertex.
+- **Colours** = weighted average of the source frames that see the vertex,
+  weight `cos²` of the angle between the normal and the viewing ray, so
+  grazing views cannot smear the colour.
 
 ## 8. Code map
 
@@ -265,5 +324,9 @@ recovered poses and adds per-pixel depth:
 | Reconstruction (BA, PnP, triangulation) | `crates/kornia-calib/src/sfm.rs` |
 | PnP | `crates/kornia-3d/src/pnp/` |
 | Bundle adjustment | `crates/kornia-3d/src/ba.rs`, `ba_schur.rs` |
-| PLY + normals | `src/ply_writer.rs`, `crates/kornia-3d/src/io/ply/` |
-| Voxel grid (for TSDF) | `crates/kornia-3d/src/voxel/` |
+| Plane sweep | `src/dense.rs` |
+| TSDF | `src/tsdf.rs` |
+| Surface extraction, normals, colours, cleanup | `src/mesh.rs` |
+| Mesh simplification | `src/simplify.rs` |
+| PLY writers | `src/ply_writer.rs` (points), `src/mesh_ply.rs` (mesh) |
+| Voxel grid primitives | `crates/kornia-3d/src/voxel/` |

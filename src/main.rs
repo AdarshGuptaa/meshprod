@@ -1,39 +1,48 @@
-//! End-to-end Structure-from-Motion from a video file.
+//! End-to-end monocular reconstruction: video → sparse SfM → dense depth →
+//! TSDF volume → simplified, coloured triangle mesh.
 //!
 //! Pipeline: read the MP4 into RGB + grayscale frames, extract features
 //! (ORB or SIFT), match frames in a sliding window, chain the matches into
 //! tracks via `kornia_calib::build_tracks`, reconstruct the scene with
-//! `kornia_calib::reconstruct`, and export the point cloud (XYZ + RGB +
-//! normals) to a binary PLY file.
+//! `kornia_calib::reconstruct`, estimate dense depth by plane sweeping, fuse
+//! the depth maps into a TSDF, extract a mesh with marching tetrahedra,
+//! simplify it, and export a binary PLY with normals and vertex colours.
 //!
 //! Every pipeline stage logs its start, progress, and completion time to
 //! stderr so slow stages can be identified.
 
+mod dense;
 mod features;
 mod matching;
+mod mesh;
+mod mesh_ply;
 mod ply_writer;
 mod reconstruction;
+mod simplify;
+mod tsdf;
 mod video;
 
 #[cfg(test)]
 mod test_util;
 
 use std::error::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
 use argh::FromArgs;
+use kornia_algebra::Vec3F64;
 use kornia_calib::build_tracks;
 
 #[derive(FromArgs)]
-/// Structure-from-Motion from a video file to a point-cloud PLY.
+/// Structure-from-Motion from a video file to a simplified triangle mesh.
 struct Args {
     /// path to the input video file
     #[argh(positional)]
     video: PathBuf,
 
-    /// path to the output PLY file
+    /// path to the output mesh PLY (sparse/dense clouds are written beside it
+    /// as <stem>_sparse.ply and <stem>_cloud.ply)
     #[argh(positional)]
     output: PathBuf,
 
@@ -135,6 +144,46 @@ struct Args {
     /// tracks, more registered views; 0 = off)
     #[argh(option, default = "0")]
     wide_baseline: usize,
+
+    /// stop after the sparse reconstruction (skip dense depth and meshing)
+    #[argh(switch)]
+    sparse_only: bool,
+
+    /// dense depth-map resolution relative to the source (0.5 = half)
+    #[argh(option, default = "0.5")]
+    dense_scale: f64,
+
+    /// inverse-depth planes tested per pixel in the plane sweep
+    #[argh(option, default = "96")]
+    dense_planes: usize,
+
+    /// odd NCC window side for the plane sweep
+    #[argh(option, default = "5")]
+    dense_window: usize,
+
+    /// neighbouring views each view compares against
+    #[argh(option, default = "3")]
+    dense_neighbors: usize,
+
+    /// minimum NCC for a depth pixel to be kept
+    #[argh(option, default = "0.4")]
+    ncc_min: f32,
+
+    /// TSDF grid resolution along the longest scene axis
+    #[argh(option, default = "256")]
+    voxel_resolution: usize,
+
+    /// TSDF truncation distance in voxels
+    #[argh(option, default = "3.0")]
+    trunc_voxels: f64,
+
+    /// simplify the mesh to this many faces (0 = keep the full mesh)
+    #[argh(option, default = "20000")]
+    target_faces: usize,
+
+    /// drop connected surface patches smaller than this many faces (0 = keep all)
+    #[argh(option, default = "200")]
+    min_component_faces: usize,
 }
 
 /// Validate CLI values that must be positive.
@@ -195,7 +244,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map_err(|e| -> Box<dyn Error> { e.into() })?;
 
     // 1. Decode frames.
-    eprintln!("[1/6] reading video: {}", args.video.display());
+    eprintln!("[1/9] reading video: {}", args.video.display());
     let t = Instant::now();
     let (rgb_frames, gray_frames) = video::read_frames(&args.video, args.frame_step)?;
     let n_frames = gray_frames.len();
@@ -204,7 +253,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(|f| (f.width(), f.height()))
         .unwrap_or((0, 0));
     eprintln!(
-        "[1/6] decoded {} frames ({}x{}) in {:.1}s",
+        "[1/9] decoded {} frames ({}x{}) in {:.1}s",
         n_frames,
         frame_w,
         frame_h,
@@ -228,9 +277,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             args.detector
         );
     }
-    eprintln!("[2/6] extracting features with {:?}", args.detector);
+    eprintln!("[2/9] extracting features with {:?}", args.detector);
     if use_cuda {
-        eprintln!("[2/6] CUDA SIFT extraction (device 0)");
+        eprintln!("[2/9] CUDA SIFT extraction (device 0)");
     }
     let t = Instant::now();
     let extractor = features::make_extractor(args.detector, args.n_features, use_cuda)?;
@@ -246,12 +295,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     let total_keypoints: usize = all_features.iter().map(|f| f.n_keypoints()).sum();
     eprintln!(
-        "[2/6] extracted {total_keypoints} keypoints across {} frames in {:.1}s",
+        "[2/9] extracted {total_keypoints} keypoints across {} frames in {:.1}s",
         all_features.len(),
         t.elapsed().as_secs_f64()
     );
-    // Gray frames are only needed for extraction; release them before matching.
-    drop(gray_frames);
+    // Gray frames stay resident for the dense stage; RGB frames for sampling
+    // colours and dense texturing.
 
     // Device SIFT matcher (only when descriptors are CUDA-resident), sized to
     // the largest descriptor set so no pair can exceed its capacity.
@@ -264,7 +313,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     // 3. Match frames in a sliding window (parallel via rayon).
-    eprintln!("[3/6] matching frames (window={})", args.match_window);
+    eprintln!("[3/9] matching frames (window={})", args.match_window);
     let t = Instant::now();
     let mut edges = matching::match_pairs_parallel(
         &all_features,
@@ -273,7 +322,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         cuda_matcher.as_ref(),
     )?;
     eprintln!(
-        "[3/6] found {} matched correspondences in {:.1}s",
+        "[3/9] found {} matched correspondences in {:.1}s",
         edges.len(),
         t.elapsed().as_secs_f64()
     );
@@ -281,7 +330,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // 3.25. Optional: wide-baseline matching (long jumps beyond the window).
     if args.wide_baseline > 0 {
         eprintln!(
-            "[3/6] wide-baseline matching (stride={})",
+            "[3/9] wide-baseline matching (stride={})",
             args.wide_baseline
         );
         let t = Instant::now();
@@ -294,7 +343,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             &mut edges,
         )?;
         eprintln!(
-            "[3/6] added {added} wide-baseline matches in {:.1}s",
+            "[3/9] added {added} wide-baseline matches in {:.1}s",
             t.elapsed().as_secs_f64()
         );
     }
@@ -302,7 +351,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // 3.5. Optional: geometric verification (epipolar RANSAC) to reject false matches.
     let edges = if args.geo_verify {
         eprintln!(
-            "[3.5/6] geometric verification (threshold={} px, min_inliers={})",
+            "[3.5/9] geometric verification (threshold={} px, min_inliers={})",
             args.geo_threshold, args.geo_min_inliers
         );
         if let Some(w) = matching::min_inliers_warning(args.geo_min_inliers) {
@@ -316,7 +365,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             args.geo_min_inliers,
         );
         eprintln!(
-            "[3.5/6] filtered {before} -> {} matches in {:.1}s",
+            "[3.5/9] filtered {before} -> {} matches in {:.1}s",
             edges.len(),
             t.elapsed().as_secs_f64()
         );
@@ -326,23 +375,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     // 4. Chain matches into multi-view tracks.
-    eprintln!("[4/6] building tracks");
+    eprintln!("[4/9] building tracks");
     let t = Instant::now();
     let tracks = build_tracks(&edges);
     eprintln!(
-        "[4/6] built {} tracks in {:.1}s",
+        "[4/9] built {} tracks in {:.1}s",
         tracks.len(),
         t.elapsed().as_secs_f64()
     );
 
-    // Sample every raw observation's colour now, then release the RGB frames
-    // before reconstruction. Colours are later looked up by the surviving
-    // observation, so the frames need not stay resident.
+    // Sample every raw observation's colour now; RGB frames stay resident for
+    // the dense stage's texturing.
     let observation_colors = ply_writer::sample_observation_colors(&tracks, &rgb_frames);
-    drop(rgb_frames);
 
     // 5. Reconstruct the scene.
-    eprintln!("[5/6] reconstructing scene");
+    eprintln!("[5/9] reconstructing scene");
     let t = Instant::now();
     let progress_start = Instant::now();
     let progress: Arc<dyn Fn(usize, usize) + Send + Sync> = Arc::new(move |registered, n_cams| {
@@ -372,7 +419,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let registered = reconstruction.views.iter().filter(|v| v.is_some()).count();
     eprintln!(
-        "[5/6] reconstructed {} points across {} registered views (scale: {:?}, rmse {:.3} px) in {:.1}s",
+        "[5/9] reconstructed {} points across {} registered views (scale: {:?}, rmse {:.3} px) in {:.1}s",
         reconstruction.points.len(),
         registered,
         reconstruction.scale,
@@ -381,25 +428,231 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     if let Some((gamma, k1, k2, p1, p2)) = reconstruction.camera_correction {
         eprintln!(
-            "[5/6] refined intrinsics: gamma {gamma:.4} (fx ~ {:.1} px), k1 {k1:.4}, k2 {k2:.4}, \
+            "[5/9] refined intrinsics: gamma {gamma:.4} (fx ~ {:.1} px), k1 {k1:.4}, k2 {k2:.4}, \
              p1 {p1:.4}, p2 {p2:.4}",
             args.fx / gamma
         );
     }
 
-    // 6. Export the point cloud to PLY (XYZ + RGB + normals).
-    eprintln!("[6/6] building vertices and writing PLY");
-    let t = Instant::now();
+    // 6. Export the sparse cloud, then continue to the dense stages.
     let vertices = ply_writer::build_vertices(&reconstruction, &observation_colors);
-    ply_writer::write_ply(&args.output, &vertices)?;
+    let sparse_path = if args.sparse_only {
+        args.output.clone()
+    } else {
+        sibling_path(&args.output, "_sparse")
+    };
+    let t = Instant::now();
+    ply_writer::write_ply(&sparse_path, &vertices)?;
     eprintln!(
-        "[6/6] wrote {} vertices to {} in {:.1}s",
+        "[6/9] wrote {} sparse vertices to {} in {:.1}s",
         vertices.len(),
-        args.output.display(),
+        sparse_path.display(),
         t.elapsed().as_secs_f64(),
+    );
+    if args.sparse_only {
+        return Ok(());
+    }
+
+    // 6. Dense depth maps by plane sweeping (one per registered view).
+    eprintln!(
+        "[6/9] estimating dense depth (scale {:.2}, {} planes, {} neighbours)",
+        args.dense_scale, args.dense_planes, args.dense_neighbors
+    );
+    let t = Instant::now();
+    let cameras = dense_cameras(
+        &reconstruction,
+        args.fx,
+        args.fy,
+        args.cx,
+        args.cy,
+        n_frames,
+    );
+    let dense_cfg = dense::DenseConfig {
+        scale: args.dense_scale,
+        planes: args.dense_planes,
+        window: args.dense_window,
+        ncc_min: args.ncc_min,
+        neighbors: args.dense_neighbors,
+        lr_tolerance: 0.05,
+    };
+    let maps = dense::estimate_depth_maps(&reconstruction, &cameras, &gray_frames, &dense_cfg)?;
+    let n_maps = maps.iter().flatten().count();
+    let n_valid: usize = maps
+        .iter()
+        .flatten()
+        .map(|m| m.inv_depth.iter().filter(|v| **v > 0.0).count())
+        .sum();
+    eprintln!(
+        "[6/9] {n_maps} depth maps with {n_valid} valid pixels in {:.1}s",
+        t.elapsed().as_secs_f64()
+    );
+    if n_maps == 0 {
+        return Err("no depth maps were produced from the registered views".into());
+    }
+    let (checked, median_err, p90_err) =
+        dense::sparse_depth_check(&reconstruction, &maps, &cameras);
+    if checked > 0 {
+        eprintln!(
+            "  depth vs sparse: {checked} samples, median {:.1}% error, p90 {:.1}%",
+            median_err * 100.0,
+            p90_err * 100.0
+        );
+    }
+
+    let cloud = dense::dense_cloud(&maps, &cameras, &reconstruction.views, &rgb_frames);
+    eprintln!("  dense cloud: {} points", cloud.points.len());
+
+    // 7. Fuse the depth maps into a signed distance field.
+    eprintln!(
+        "[7/9] fusing TSDF (resolution {}, truncation {:.1} voxels)",
+        args.voxel_resolution, args.trunc_voxels
+    );
+    let t = Instant::now();
+    let volume = tsdf::fuse(
+        &maps,
+        &cameras,
+        &reconstruction.views,
+        &cloud.points,
+        &tsdf::TsdfConfig {
+            resolution: args.voxel_resolution,
+            trunc_voxels: args.trunc_voxels,
+        },
+    )?;
+    eprintln!(
+        "[7/9] volume {}x{}x{} at {:.4} units/voxel in {:.1}s",
+        volume.dims[0],
+        volume.dims[1],
+        volume.dims[2],
+        volume.voxel_size,
+        t.elapsed().as_secs_f64()
+    );
+    let observed = volume.weight.iter().filter(|w| **w > 0.0).count();
+    let inside = volume
+        .weight
+        .iter()
+        .zip(&volume.sdf)
+        .filter(|(w, s)| **w > 0.0 && **s < 0.0)
+        .count();
+    eprintln!(
+        "  observed voxels: {observed}, solid (sdf<0): {inside}, truncation {:.2} units",
+        args.trunc_voxels * volume.voxel_size
+    );
+
+    // 8. Extract the surface, simplify it, and compute vertex attributes.
+    eprintln!("[8/9] extracting surface and simplifying");
+    let t = Instant::now();
+    let mut mesh = mesh::marching_tetrahedra(&volume);
+    eprintln!(
+        "  raw mesh: {} vertices, {} faces, {} patches",
+        mesh.vertex_count(),
+        mesh.face_count(),
+        mesh.connected_components()
+    );
+    if mesh.face_count() == 0 {
+        return Err(
+            "the TSDF produced an empty mesh; try a lower --ncc-min or a higher --voxel-resolution"
+                .into(),
+        );
+    }
+    if args.min_component_faces > 0 {
+        mesh = mesh.remove_small_components(args.min_component_faces);
+        eprintln!(
+            "  removed small patches: {} faces in {} patches remain",
+            mesh.face_count(),
+            mesh.connected_components()
+        );
+    }
+    if args.target_faces > 0 && mesh.face_count() > args.target_faces {
+        mesh = simplify::simplify(&mesh, args.target_faces);
+        eprintln!("  simplified to {} faces", mesh.face_count());
+    }
+    let normals = mesh::vertex_normals(&mesh, &volume);
+    let colors = mesh::vertex_colors(
+        &mesh,
+        &normals,
+        &cameras,
+        &reconstruction.views,
+        &rgb_frames,
+    );
+    mesh_ply::write_mesh_ply(&args.output, &mesh, &normals, &colors)?;
+    eprintln!(
+        "[9/9] wrote mesh ({} vertices, {} faces, patches={}, euler={}, closed={}) to {} in {:.1}s",
+        mesh.vertex_count(),
+        mesh.face_count(),
+        mesh.connected_components(),
+        mesh.euler_characteristic(),
+        mesh.is_closed(),
+        args.output.display(),
+        t.elapsed().as_secs_f64()
+    );
+
+    // 9. A voxel-downsampled dense cloud for inspection.
+    let down = dense::voxel_downsample_cloud(&cloud, volume.voxel_size * 2.0)?;
+    let cloud_vertices: Vec<ply_writer::Vertex> = down
+        .points
+        .iter()
+        .zip(&down.colors)
+        .map(|(p, c)| ply_writer::Vertex {
+            position: *p,
+            color: *c,
+            normal: volume.gradient(Vec3F64::new(p[0], p[1], p[2])).to_array(),
+        })
+        .collect();
+    let cloud_path = sibling_path(&args.output, "_cloud");
+    ply_writer::write_ply(&cloud_path, &cloud_vertices)?;
+    eprintln!(
+        "[9/9] wrote {} dense points to {}",
+        cloud_vertices.len(),
+        cloud_path.display()
     );
 
     Ok(())
+}
+
+/// Sibling output path: `<stem><suffix><ext>` next to `output`.
+fn sibling_path(output: &Path, suffix: &str) -> PathBuf {
+    let stem = output
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "output".to_string());
+    let ext = output
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    output.with_file_name(format!("{stem}{suffix}{ext}"))
+}
+
+/// Cameras for the dense stage, corrected by the intrinsics bundle adjustment
+/// fitted in the sparse solve.
+///
+/// `gamma` scales normalized coordinates, so it inverts into focal length:
+/// `fx_true = fx_assumed / gamma`. Lens distortion is ignored by the dense
+/// projector (the sweep is a pure pinhole homography), so a large fit is
+/// reported rather than silently misused.
+fn dense_cameras(
+    reconstruction: &kornia_calib::Reconstruction,
+    fx: f64,
+    fy: f64,
+    cx: f64,
+    cy: f64,
+    n_frames: usize,
+) -> Vec<kornia_3d::camera::PinholeCamera> {
+    let mut cameras = vec![reconstruction::make_camera(fx, fy, cx, cy); n_frames];
+    if let Some((gamma, k1, k2, p1, p2)) = reconstruction.camera_correction {
+        if gamma > 0.0 && gamma.is_finite() {
+            for cam in &mut cameras {
+                cam.fx = fx / gamma;
+                cam.fy = fy / gamma;
+            }
+        }
+        if k1.abs() > 1e-3 || k2.abs() > 1e-3 || p1.abs() > 1e-3 || p2.abs() > 1e-3 {
+            eprintln!(
+                "  warning: dense stage ignores fitted distortion (k1={k1:.4}, k2={k2:.4}, \
+                 p1={p1:.4}, p2={p2:.4}); expect some depth bias toward the frame edges"
+            );
+        }
+    }
+    cameras
 }
 
 #[cfg(test)]

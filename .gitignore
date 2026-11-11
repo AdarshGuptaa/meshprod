@@ -2,3 +2,5 @@
 *.ply
 *.rrd
 .DS_Store
+
+/out
