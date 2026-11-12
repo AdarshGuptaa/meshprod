@@ -21,13 +21,24 @@ pub struct TsdfConfig {
     pub resolution: usize,
     /// Truncation distance, in voxels.
     pub trunc_voxels: f64,
+    /// Measured relative depth error (e.g. from the sparse-depth check). When
+    /// present, the truncation band is widened to `1.5 * error * median depth`,
+    /// so noisy depth maps vote consistently instead of cancelling out.
+    pub depth_noise_relative: Option<f64>,
 }
+
+/// Minimum truncation distance as a fraction of the median camera-to-scene
+/// distance. Depth error grows with distance (roughly proportionally), so a
+/// band tied only to the voxel size can be narrower than the noise it must
+/// absorb — the fused votes then disagree and the surface washes out.
+const MIN_TRUNC_RELATIVE_DEPTH: f64 = 0.03;
 
 impl Default for TsdfConfig {
     fn default() -> Self {
         Self {
             resolution: 192,
             trunc_voxels: 4.0,
+            depth_noise_relative: None,
         }
     }
 }
@@ -42,6 +53,8 @@ pub struct Volume {
     pub origin: Vec3F64,
     /// Grid spacing.
     pub voxel_size: f64,
+    /// Effective truncation distance in world units.
+    pub trunc: f64,
     /// Grid dimensions (grid points, not cells).
     pub dims: [usize; 3],
     /// Signed distance per grid point, normalized by the truncation distance.
@@ -139,6 +152,38 @@ fn bounds(points: &[[f64; 3]]) -> Option<([f64; 3], [f64; 3])> {
     Some((lo, hi))
 }
 
+/// Outlier-robust bounds: per-axis 1st and 99th percentiles.
+///
+/// A few erroneous depth points must not stretch the volume: every extra
+/// unit of bounding box is voxels not spent on the object.
+fn robust_bounds(points: &[[f64; 3]]) -> Option<([f64; 3], [f64; 3])> {
+    if points.len() < 16 {
+        return bounds(points);
+    }
+    let n = points.len();
+    let mut axes: [Vec<f64>; 3] = [
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+    ];
+    for p in points {
+        for (axis, values) in axes.iter_mut().enumerate() {
+            values.push(p[axis]);
+        }
+    }
+    let mut lo = [0.0; 3];
+    let mut hi = [0.0; 3];
+    for (axis, values) in axes.iter_mut().enumerate() {
+        values.sort_by(f64::total_cmp);
+        lo[axis] = values[n / 100];
+        hi[axis] = values[(n * 99 / 100).min(n - 1)];
+        if hi[axis] <= lo[axis] {
+            return bounds(points);
+        }
+    }
+    Some((lo, hi))
+}
+
 /// Fuse depth maps into a volume.
 ///
 /// The grid covers the bounding box of `points` (typically the dense cloud)
@@ -154,7 +199,7 @@ pub fn fuse(
     points: &[[f64; 3]],
     cfg: &TsdfConfig,
 ) -> Result<Volume, Box<dyn Error>> {
-    let (lo, hi) = bounds(points).ok_or("no points to bound the TSDF volume")?;
+    let (lo, hi) = robust_bounds(points).ok_or("no points to bound the TSDF volume")?;
     let active: Vec<&DepthMap> = maps.iter().flatten().collect();
     if active.is_empty() {
         return Err("no depth maps to fuse".into());
@@ -167,8 +212,34 @@ pub fn fuse(
     ];
     let longest = extent[0].max(extent[1]).max(extent[2]).max(1e-6);
     let voxel_size = longest / cfg.resolution.max(8) as f64;
-    let trunc = cfg.trunc_voxels.max(1.0) * voxel_size;
-    let pad = (cfg.trunc_voxels + 2.0) * voxel_size;
+
+    // Physical floor for the truncation band: depth uncertainty scales with
+    // the viewing distance, not with the object size.
+    let centroid = Vec3F64::new(
+        (lo[0] + hi[0]) * 0.5,
+        (lo[1] + hi[1]) * 0.5,
+        (lo[2] + hi[2]) * 0.5,
+    );
+    let mut distances: Vec<f64> = active
+        .iter()
+        .filter_map(|m| views[m.view].map(|p| (p.translation - centroid).length()))
+        .collect();
+    distances.sort_by(f64::total_cmp);
+    let median_distance = distances
+        .get(distances.len() / 2)
+        .copied()
+        .unwrap_or(longest);
+
+    let noise_floor = 1.5
+        * cfg
+            .depth_noise_relative
+            .unwrap_or(MIN_TRUNC_RELATIVE_DEPTH)
+            .clamp(0.005, 0.15)
+        * median_distance;
+    let trunc = (cfg.trunc_voxels.max(1.0) * voxel_size)
+        .max(noise_floor)
+        .max(1.5 * voxel_size);
+    let pad = trunc + 2.0 * voxel_size;
     let origin = Vec3F64::new(lo[0] - pad, lo[1] - pad, lo[2] - pad);
     let dim = |e: f64| (((e + 2.0 * pad) / voxel_size).ceil() as usize + 1).max(2);
     let dims = [dim(extent[0]), dim(extent[1]), dim(extent[2])];
@@ -231,6 +302,7 @@ pub fn fuse(
     Ok(Volume {
         origin,
         voxel_size,
+        trunc,
         dims,
         sdf,
         weight,
@@ -279,12 +351,13 @@ mod tests {
         let cfg = TsdfConfig {
             resolution: 32,
             trunc_voxels: 4.0,
+            depth_noise_relative: None,
         };
         let vol = fuse(&maps, &cameras, &views, &points, &cfg).unwrap();
 
         // Sample the field just in front of and behind the plane, at the
         // optical axis. The normalized value must match dist / trunc.
-        let trunc = cfg.trunc_voxels * vol.voxel_size;
+        let trunc = vol.trunc;
         let front = Vec3F64::new(0.0, 0.0, 2.0 - 0.5 * trunc);
         let behind = Vec3F64::new(0.0, 0.0, 2.0 + 0.5 * trunc);
         let s_front = vol.sample(front);
@@ -304,6 +377,7 @@ mod tests {
         let cfg = TsdfConfig {
             resolution: 32,
             trunc_voxels: 3.0,
+            depth_noise_relative: None,
         };
         let vol = fuse(&maps, &cameras, &views, &points, &cfg).unwrap();
         let far_in_front = Vec3F64::new(0.0, 0.0, 2.0 - 10.0 * vol.voxel_size);
@@ -323,6 +397,7 @@ mod tests {
         let cfg = TsdfConfig {
             resolution: 24,
             trunc_voxels: 4.0,
+            depth_noise_relative: None,
         };
         let vol = fuse(&maps, &cameras, &views, &points, &cfg).unwrap();
         let g = vol.gradient(Vec3F64::new(0.0, 0.0, 2.0));

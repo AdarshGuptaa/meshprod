@@ -55,8 +55,8 @@ Open them in MeshLab, CloudCompare, Blender or Open3D.
 | Registered views | 22 / 63 |
 | Sparse points / RMSE | 1,175 / 2.086 px |
 | Dense depth vs sparse depth | median 4.8 % error |
-| Raw mesh | 39,521 faces |
-| Final mesh | 19,999 faces, 18 patches, ~55 s CPU |
+| Raw mesh | 169,154 faces |
+| Final mesh | 29,435 faces, 41 patches, ~60 s CPU |
 | Determinism | byte-identical reruns |
 
 The object is a polished Swiss knife; its specular blade is the main reason the

@@ -420,6 +420,7 @@ mod tests {
         marching_tetrahedra(&Volume {
             origin,
             voxel_size: voxel,
+            trunc: 4.0 * voxel,
             dims: [n, n, n],
             sdf,
             weight,

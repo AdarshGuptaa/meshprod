@@ -42,13 +42,21 @@ geometry, and the trustworthiness question is about the *system's* behaviour
 | Sparse reprojection RMSE | 2.086 px |
 | Dense depth pixels kept | 2,199,161 |
 | Dense depth vs sparse depth | **median 4.8 %**, p90 44.8 % (13,659 samples) |
-| TSDF volume | 267 × 228 × 196 @ 3.77 units/voxel |
-| Observed / solid voxels | 64,165 / 33,628 |
-| Raw mesh | 26,355 vertices, 39,521 faces, 493 patches |
-| After small-patch removal (≥200 faces) | 31,437 faces, 18 patches |
-| Final simplified mesh | 13,394 vertices, **19,999 faces**, 18 patches |
-| Mesh topology | open (partial scan), Euler = −141 |
+| TSDF volume | 197 × 218 × 285 @ 2.30 units/voxel |
+| Observed / solid voxels | 451,662 / 220,569 |
+| Raw mesh | 106,951 vertices, 169,154 faces, 1,940 patches |
+| After small-patch removal (≥200 faces) | 137,591 faces, 42 patches |
+| Final simplified mesh | 26,031 vertices, **29,435 faces**, 41 patches |
+| Mesh topology | open (partial scan), Euler = −604 |
 | Wall time | ≈ 55 s (decode 23.5 s, features 2.5 s, dense ≈ 25 s) |
+
+**Fusion calibration fix.** Early runs used a truncation band derived only
+from the voxel size and a bounding box containing every dense point. Both were
+wrong for noisy data: a handful of bad depths inflated the box ~20×, and the
+band was narrower than the measured depth error (3–5 % of depth). The volume
+now uses 1–99 % per-axis bounds and a truncation floor of
+`1.5 × measured_error × median_depth`. Raw mesh faces rose from 39,521 to
+169,154 and the principal-axis extent became knife-like (2.0 : 1.09 : 0.40).
 
 ### 2.2 Repeatability (determinism)
 
@@ -56,8 +64,8 @@ Two independent full runs produced **byte-identical** outputs:
 
 ```
 sparse PLY   sha256 cc05bebb…
-dense PLY    sha256 1a68366b…
-mesh PLY     sha256 9cdafa19…
+dense PLY    sha256 df724bdf…
+mesh PLY     sha256 fce7933d…
 ```
 
 Same seed, same input, same result — a prerequisite for auditing and for
@@ -82,9 +90,11 @@ should warn when the registered-view ratio is low (it currently only logs it).
 
 | Run | Registered views | Dense depth median error | Raw mesh faces |
 |---|---|---|---|
-| frame-step 10 (default) | 22 | 4.8 % | 39,521 |
+| frame-step 10 (default) | 22 | 4.8 % | 169,154¹ |
 | frame-step 5 | 39 | 3.9 % | 4,493 |
 | frame-step 5, voxel 128 / trunc 8 | 39 | 3.9 % | 484 |
+
+¹ Measured after the robust-bounds + adaptive-truncation fix described below; the other rows predate it.
 
 More registered views did **not** produce a better mesh here: the denser
 sampling changed the SfM scale/arbitration and interacted badly with the

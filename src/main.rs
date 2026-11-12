@@ -516,6 +516,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &tsdf::TsdfConfig {
             resolution: args.voxel_resolution,
             trunc_voxels: args.trunc_voxels,
+            depth_noise_relative: (checked > 0).then_some(median_err),
         },
     )?;
     eprintln!(
@@ -535,7 +536,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .count();
     eprintln!(
         "  observed voxels: {observed}, solid (sdf<0): {inside}, truncation {:.2} units",
-        args.trunc_voxels * volume.voxel_size
+        volume.trunc
     );
 
     // 8. Extract the surface, simplify it, and compute vertex attributes.

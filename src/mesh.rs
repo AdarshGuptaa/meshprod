@@ -444,6 +444,7 @@ mod tests {
         Volume {
             origin,
             voxel_size: voxel,
+            trunc: 4.0 * voxel,
             dims,
             sdf,
             weight,
@@ -487,6 +488,7 @@ mod tests {
         let vol = Volume {
             origin: Vec3F64::ZERO,
             voxel_size: 1.0,
+            trunc: 4.0,
             dims: [4, 4, 4],
             sdf: vec![1.0; 64],
             weight: vec![0.0; 64],
