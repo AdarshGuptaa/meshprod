@@ -169,6 +169,23 @@ struct Args {
     #[argh(option, default = "0.4")]
     ncc_min: f32,
 
+    /// neighbours that must agree on a depth (geometric consistency; 1 = loose)
+    #[argh(option, default = "1")]
+    lr_required: usize,
+
+    /// volumetric diffusion iterations that close holes in the TSDF (0 = off;
+    /// off by default because diffusion invents surface where there is no data)
+    #[argh(option, default = "0")]
+    hole_fill_iterations: usize,
+
+    /// box-filter iterations on the TSDF before meshing (0 = off)
+    #[argh(option, default = "2")]
+    volume_smoothing: usize,
+
+    /// taubin smoothing iterations after meshing (0 = off)
+    #[argh(option, default = "8")]
+    smooth_iterations: usize,
+
     /// TSDF grid resolution along the longest scene axis
     #[argh(option, default = "256")]
     voxel_resolution: usize,
@@ -474,6 +491,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ncc_min: args.ncc_min,
         neighbors: args.dense_neighbors,
         lr_tolerance: 0.05,
+        lr_required: args.lr_required,
     };
     let maps = dense::estimate_depth_maps(&reconstruction, &cameras, &gray_frames, &dense_cfg)?;
     let n_maps = maps.iter().flatten().count();
@@ -517,6 +535,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             resolution: args.voxel_resolution,
             trunc_voxels: args.trunc_voxels,
             depth_noise_relative: (checked > 0).then_some(median_err),
+            ncc_min: args.ncc_min,
         },
     )?;
     eprintln!(
@@ -538,6 +557,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         "  observed voxels: {observed}, solid (sdf<0): {inside}, truncation {:.2} units",
         volume.trunc
     );
+    let mut volume = volume;
+    if args.hole_fill_iterations > 0 {
+        let t = Instant::now();
+        let filled = tsdf::fill_holes(&mut volume, args.hole_fill_iterations);
+        let observed_after = volume.weight.iter().filter(|w| **w > 0.0).count();
+        eprintln!(
+            "  diffusion filled {filled} voxels ({} iterations) -> {observed_after} observed in {:.1}s",
+            args.hole_fill_iterations,
+            t.elapsed().as_secs_f64()
+        );
+    }
+    if args.volume_smoothing > 0 {
+        let t = Instant::now();
+        tsdf::smooth_volume(&mut volume, args.volume_smoothing);
+        eprintln!(
+            "  field smoothing: {} iterations in {:.1}s",
+            args.volume_smoothing,
+            t.elapsed().as_secs_f64()
+        );
+    }
 
     // 8. Extract the surface, simplify it, and compute vertex attributes.
     eprintln!("[8/9] extracting surface and simplifying");
@@ -561,6 +600,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             "  removed small patches: {} faces in {} patches remain",
             mesh.face_count(),
             mesh.connected_components()
+        );
+    }
+    if args.smooth_iterations > 0 {
+        let t = Instant::now();
+        mesh = mesh::taubin_smooth(&mesh, args.smooth_iterations, 0.5, -0.53);
+        eprintln!(
+            "  Taubin smoothing: {} iterations in {:.1}s (closed={}, euler={})",
+            args.smooth_iterations,
+            t.elapsed().as_secs_f64(),
+            mesh.is_closed(),
+            mesh.euler_characteristic()
         );
     }
     if args.target_faces > 0 && mesh.face_count() > args.target_faces {
@@ -605,6 +655,27 @@ fn main() -> Result<(), Box<dyn Error>> {
         "[9/9] wrote {} dense points to {}",
         cloud_vertices.len(),
         cloud_path.display()
+    );
+
+    // Oriented cloud for external reconstruction backends (e.g. Open3D's
+    // screened Poisson): finer sampling, normals from the TSDF gradient.
+    let oriented = dense::voxel_downsample_cloud(&cloud, volume.voxel_size)?;
+    let oriented_vertices: Vec<ply_writer::Vertex> = oriented
+        .points
+        .iter()
+        .zip(&oriented.colors)
+        .map(|(p, c)| ply_writer::Vertex {
+            position: *p,
+            color: *c,
+            normal: volume.gradient(Vec3F64::new(p[0], p[1], p[2])).to_array(),
+        })
+        .collect();
+    let oriented_path = sibling_path(&args.output, "_oriented");
+    ply_writer::write_ply(&oriented_path, &oriented_vertices)?;
+    eprintln!(
+        "[9/9] wrote {} oriented points to {} (Poisson input)",
+        oriented_vertices.len(),
+        oriented_path.display()
     );
 
     Ok(())

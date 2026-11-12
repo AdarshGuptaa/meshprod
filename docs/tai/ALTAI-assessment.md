@@ -44,10 +44,10 @@ geometry, and the trustworthiness question is about the *system's* behaviour
 | Dense depth vs sparse depth | **median 4.8 %**, p90 44.8 % (13,659 samples) |
 | TSDF volume | 197 × 218 × 285 @ 2.30 units/voxel |
 | Observed / solid voxels | 451,662 / 220,569 |
-| Raw mesh | 106,951 vertices, 169,154 faces, 1,940 patches |
-| After small-patch removal (≥200 faces) | 137,591 faces, 42 patches |
-| Final simplified mesh | 26,031 vertices, **29,435 faces**, 41 patches |
-| Mesh topology | open (partial scan), Euler = −604 |
+| Raw mesh | 66,459 vertices, 109,933 faces, 525 patches |
+| After small-patch removal (≥200 faces) | 100,612 faces, 36 patches |
+| Final mesh (Taubin + QEM) | 17,754 vertices, **20,000 faces**, 36 patches |
+| Mesh topology | open (partial scan), Euler = −102 |
 | Wall time | ≈ 55 s (decode 23.5 s, features 2.5 s, dense ≈ 25 s) |
 
 **Fusion calibration fix.** Early runs used a truncation band derived only
@@ -57,6 +57,30 @@ band was narrower than the measured depth error (3–5 % of depth). The volume
 now uses 1–99 % per-axis bounds and a truncation floor of
 `1.5 × measured_error × median_depth`. Raw mesh faces rose from 39,521 to
 169,154 and the principal-axis extent became knife-like (2.0 : 1.09 : 0.40).
+
+### 2.1b Algorithmic improvements (Path 1) and Poisson (Path 2)
+
+| Variant | Depth error (median/p90) | Raw faces | Patches | Euler |
+|---|---|---|---|---|
+| Before (v4 baseline) | 4.8 % / 44.8 % | 169,154 | 1,940 → 42 | −604 |
+| + weighted fusion, consistency=2, diffusion 12 | **3.5 % / 22.7 %** | 552,656 | 302 → 21 | −534 |
+| + field smoothing, Taubin, no fill | 4.8 % / 44.8 % | 109,933 | 525 → 36 | **−102** |
+| + diffusion 3, field smoothing 2 | 4.8 % / 44.8 % | 451,170 | 237 → 50 | −201 |
+
+Field smoothing and Taubin clearly improve topology (Euler −604 → −102) and
+remove voxel-scale pyramids. Volumetric diffusion **over-fills**: it invents
+surface where no camera looked, producing blobs and sheets, so it ships
+disabled by default. Requiring two consistent neighbours halves the number of
+depth pixels but improves accuracy substantially; it is exposed as
+`--lr-required`.
+
+**Poisson backend (Open3D screened Poisson, depth 9, same oriented cloud):**
+19,999 triangles but `watertight = false` after density trimming, mean
+nearest-vertex distance to our mesh 60.3 units (~10 % of scene scale),
+Hausdorff 602 units. Visually it produced lumpy blobs: a smooth prior cannot
+recover geometry the input never observed. The conclusion is a *data-bound*
+result, not a solver failure — on a complete, matte capture Poisson is the
+better backend, and the script is kept for that case.
 
 ### 2.2 Repeatability (determinism)
 
@@ -90,7 +114,7 @@ should warn when the registered-view ratio is low (it currently only logs it).
 
 | Run | Registered views | Dense depth median error | Raw mesh faces |
 |---|---|---|---|
-| frame-step 10 (default) | 22 | 4.8 % | 169,154¹ |
+| frame-step 10 (default) | 22 | 4.8 % | 109,933¹ |
 | frame-step 5 | 39 | 3.9 % | 4,493 |
 | frame-step 5, voxel 128 / trunc 8 | 39 | 3.9 % | 484 |
 

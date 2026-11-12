@@ -16,11 +16,14 @@ phone MP4 ─► frames ─► sparse SfM ─► dense depth ─► TSDF fusion 
 | SIFT/ORB features + matching + geometric verification | ✅ |
 | Sparse reconstruction (`kornia-calib::reconstruct`) | ✅ |
 | Sparse PLY (XYZ + RGB + normals) | ✅ |
-| Dense depth (plane sweep, NCC, left-right check) | ✅ |
-| TSDF fusion (`kornia-3d::voxel`-style dense grid) | ✅ |
+| Dense depth (plane sweep, NCC, multi-view consistency) | ✅ |
+| TSDF fusion (confidence- and view-angle-weighted votes) | ✅ |
+| Field smoothing + Taubin mesh smoothing | ✅ |
 | Marching-tetrahedra mesh extraction | ✅ |
 | Quadric-error-metric simplification | ✅ |
+| Volumetric hole filling (off by default; see TAI) | ✅ |
 | Mesh PLY (vertices, faces, normals, colours) | ✅ |
+| Poisson backend comparison (Open3D, screened Poisson) | ✅ `scripts/open3d_poisson.py` |
 | Trustworthy-AI (EU ALTAI) assessment | ✅ `docs/tai/ALTAI-assessment.md` |
 
 ## Quick start
@@ -48,6 +51,23 @@ Outputs next to `out/mesh.ply`:
 
 Open them in MeshLab, CloudCompare, Blender or Open3D.
 
+### Poisson comparison backend (Open3D)
+
+```bash
+python3 -m venv ~/Dev/tools/venv-o3d
+~/Dev/tools/venv-o3d/bin/pip install open3d
+~/Dev/tools/venv-o3d/bin/python scripts/open3d_poisson.py \
+    out/mesh_oriented.ply out/mesh_poisson.ply --target-faces 20000 \
+    --reference out/mesh.ply
+```
+
+### Blender demo
+
+```bash
+~/Dev/tools/blender-4.5.3-linux-x64/blender -b \
+    --python scripts/blender_demo.py -- out/mesh.ply out/demo
+```
+
 ### Result on `swiss_knife.mp4` (628 frames, 1280×720 HEVC)
 
 | Metric | Value |
@@ -55,8 +75,8 @@ Open them in MeshLab, CloudCompare, Blender or Open3D.
 | Registered views | 22 / 63 |
 | Sparse points / RMSE | 1,175 / 2.086 px |
 | Dense depth vs sparse depth | median 4.8 % error |
-| Raw mesh | 169,154 faces |
-| Final mesh | 29,435 faces, 41 patches, ~60 s CPU |
+| Raw mesh | 109,933 faces |
+| Final mesh | 20,000 faces, 36 patches, ~60 s CPU |
 | Determinism | byte-identical reruns |
 
 The object is a polished Swiss knife; its specular blade is the main reason the
@@ -72,10 +92,12 @@ mesh is open and split into patches. See the TAI report for the failure modes.
 5. **Sparse SfM**: bootstrap, PnP registration (SPRT), triangulation, bundle
    adjustment (up to scale).
 6. **Dense depth**: per registered view, sweep inverse-depth planes and keep
-   the depth with the best NCC; cross-check with neighbours.
-7. **TSDF**: average "in front / behind" votes into a signed distance field.
-8. **Mesh**: marching tetrahedra, drop small patches, quadric-error-metric
-   simplification.
+   the depth with the best NCC; require agreement from `--lr-required`
+   neighbours.
+7. **TSDF**: weighted "in front / behind" votes (confidence × view angle) into
+   a signed distance field; optional box-filter smoothing.
+8. **Mesh**: marching tetrahedra, drop small patches, Taubin smoothing,
+   quadric-error-metric simplification.
 9. **Attributes**: normals from the TSDF gradient, colours by projecting each
    vertex into the source frames.
 
@@ -94,6 +116,10 @@ mesh is open and split into patches. See the TAI report for the failure modes.
 | `--dense-scale` | depth-map resolution relative to source (0.5 default) |
 | `--dense-planes` / `--dense-neighbors` / `--ncc-min` | plane-sweep quality knobs |
 | `--voxel-resolution` / `--trunc-voxels` | TSDF resolution and band width |
+| `--lr-required` | neighbours that must agree on a depth (default 1) |
+| `--volume-smoothing` | TSDF box-filter iterations before meshing (default 2) |
+| `--smooth-iterations` | Taubin smoothing iterations (default 8) |
+| `--hole-fill-iterations` | TSDF diffusion hole filling (default 0; risky) |
 | `--target-faces` | simplify the mesh to this budget (0 = keep) |
 | `--min-component-faces` | drop patches smaller than this (0 = keep) |
 
@@ -137,3 +163,5 @@ kornia-3d = { git = "https://github.com/AdarshGuptaa/kornia-rs.git", branch = "s
 - The dense stage ignores lens distortion (a warning is printed if the solve
   fitted a large one).
 - Background inside the reconstruction volume is meshed too (no segmentation).
+- On the supplied specular knife clip the mesh remains fragmented: the ceiling
+  is the capture, not the solver (see the TAI report's Path-1/Path-2 results).

@@ -29,6 +29,9 @@ pub struct DenseConfig {
     pub neighbors: usize,
     /// Relative tolerance of the left-right depth check.
     pub lr_tolerance: f64,
+    /// How many neighbours must independently agree on a depth (COLMAP-style
+    /// geometric consistency; 1 = the old behaviour).
+    pub lr_required: usize,
 }
 
 impl Default for DenseConfig {
@@ -40,6 +43,7 @@ impl Default for DenseConfig {
             ncc_min: 0.4,
             neighbors: 3,
             lr_tolerance: 0.05,
+            lr_required: 2,
         }
     }
 }
@@ -59,6 +63,11 @@ pub struct DepthMap {
     pub scale: f64,
     /// Inverse depth per pixel (`0.0` = invalid).
     pub inv_depth: Vec<f32>,
+    /// Best NCC of the winning plane per pixel (`0.0` where invalid).
+    pub confidence: Vec<f32>,
+    /// Unit surface normal per pixel in camera coordinates (zero if unknown),
+    /// oriented toward the camera.
+    pub normals: Vec<[f32; 3]>,
     /// Frame indices of the neighbours used to produce this map.
     pub neighbors: Vec<usize>,
 }
@@ -267,13 +276,15 @@ fn sweep_view(
     let window = window.min(MAX_WINDOW);
     let half = window / 2;
     let mut inv_depth = vec![0.0f32; width * height];
+    let mut confidence = vec![0.0f32; width * height];
 
     inv_depth
         .par_chunks_mut(width)
+        .zip(confidence.par_chunks_mut(width))
         .enumerate()
-        .for_each(|(row, out_row)| {
+        .for_each(|(row, (out_row, conf_row))| {
             let sy = row as f64 / scale;
-            for (col, out) in out_row.iter_mut().enumerate() {
+            for (col, (out, conf)) in out_row.iter_mut().zip(conf_row.iter_mut()).enumerate() {
                 let sx = col as f64 / scale;
 
                 // Reference window statistics are plane-independent.
@@ -356,6 +367,7 @@ fn sweep_view(
 
                 if best_ncc >= cfg.ncc_min && best_rho > 0.0 {
                     *out = best_rho as f32;
+                    *conf = best_ncc;
                 }
             }
         });
@@ -366,6 +378,8 @@ fn sweep_view(
         height,
         scale,
         inv_depth,
+        confidence,
+        normals: vec![[0.0; 3]; width * height],
         neighbors: neighbours,
     })
 }
@@ -422,6 +436,8 @@ pub fn estimate_depth_maps(
             map.view,
             map.neighbors.clone(),
         );
+        let confidence = map.confidence.clone();
+        let normals = map.normals.clone();
         let pose_i = reconstruction.views[i].expect("registered");
         let cam_i = &cameras[i];
         let mut filtered = map.inv_depth.clone();
@@ -437,7 +453,7 @@ pub fn estimate_depth_maps(
                 let p_cam = ray * d;
                 let p_world = pose_i.transform_point(&p_cam);
 
-                let mut consistent = false;
+                let mut consistent = 0usize;
                 for &j in &neighbors {
                     let Some(nbr_map) = maps[j].as_ref() else {
                         continue;
@@ -463,11 +479,11 @@ pub fn estimate_depth_maps(
                         continue;
                     };
                     if (p_nbr.z - d_nbr).abs() <= cfg.lr_tolerance * d_nbr {
-                        consistent = true;
-                        break;
+                        consistent += 1;
                     }
                 }
-                if !consistent {
+                let required = cfg.lr_required.max(1).min(neighbors.len().max(1));
+                if consistent < required {
                     filtered[y * width + x] = 0.0;
                 }
             }
@@ -478,11 +494,61 @@ pub fn estimate_depth_maps(
             height,
             scale,
             inv_depth: filtered,
+            confidence,
+            normals,
             neighbors,
         });
     }
 
+    // Surface normals from the depth-image gradients, for view-angle weighting.
+    for map in maps.iter_mut().flatten() {
+        compute_depth_normals(map, &cameras[map.view]);
+    }
+
     Ok(maps)
+}
+
+/// Per-pixel surface normals from central differences of the depth image.
+fn compute_depth_normals(map: &mut DepthMap, cam: &PinholeCamera) {
+    let (w, h) = (map.width, map.height);
+    let k_inv = k_inverse(cam);
+    let mut normals = vec![[0.0f32; 3]; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let point = |xx: isize, yy: isize| -> Option<Vec3F64> {
+                if xx < 0 || yy < 0 || xx >= w as isize || yy >= h as isize {
+                    return None;
+                }
+                let d = map.depth_at(xx as usize, yy as usize)?;
+                let sx = xx as f64 / map.scale;
+                let sy = yy as f64 / map.scale;
+                Some(k_inv * Vec3F64::new(sx, sy, 1.0) * d)
+            };
+            let Some(p) = point(x as isize, y as isize) else {
+                continue;
+            };
+            let (Some(px), Some(nx), Some(py), Some(ny)) = (
+                point(x as isize + 1, y as isize),
+                point(x as isize - 1, y as isize),
+                point(x as isize, y as isize + 1),
+                point(x as isize, y as isize - 1),
+            ) else {
+                continue;
+            };
+            let mut n = (px - nx).cross(py - ny);
+            let len = n.length();
+            if len < 1e-12 {
+                continue;
+            }
+            n /= len;
+            // Orient toward the camera (at the origin in camera coordinates).
+            if n.dot(-p) < 0.0 {
+                n = -n;
+            }
+            normals[y * w + x] = [n.x as f32, n.y as f32, n.z as f32];
+        }
+    }
+    map.normals = normals;
 }
 
 /// Agreement between the dense depth maps and the sparse reconstruction.

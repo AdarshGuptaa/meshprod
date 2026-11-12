@@ -25,6 +25,9 @@ pub struct TsdfConfig {
     /// present, the truncation band is widened to `1.5 * error * median depth`,
     /// so noisy depth maps vote consistently instead of cancelling out.
     pub depth_noise_relative: Option<f64>,
+    /// NCC below which a depth pixel carries no weight (matches the sweep's
+    /// acceptance threshold).
+    pub ncc_min: f32,
 }
 
 /// Minimum truncation distance as a fraction of the median camera-to-scene
@@ -39,6 +42,7 @@ impl Default for TsdfConfig {
             resolution: 192,
             trunc_voxels: 4.0,
             depth_noise_relative: None,
+            ncc_min: 0.4,
         }
     }
 }
@@ -286,8 +290,22 @@ pub fn fuse(
                         if dist.abs() > trunc {
                             continue;
                         }
-                        w_sum += 1.0;
-                        d_sum += dist as f32;
+                        // Curless-Levoy weighting: trust a vote by its
+                        // photometric confidence and by how squarely the
+                        // surface faces this camera.
+                        let pix = my as usize * map.width + mx as usize;
+                        let conf = map.confidence.get(pix).copied().unwrap_or(1.0);
+                        let conf_w = ((conf - cfg.ncc_min).max(0.01) as f64).powi(2);
+                        let n = map.normals.get(pix).copied().unwrap_or([0.0; 3]);
+                        let angle_w = if n == [0.0; 3] {
+                            1.0
+                        } else {
+                            let normal = Vec3F64::new(n[0] as f64, n[1] as f64, n[2] as f64);
+                            normal.dot((-p_cam).normalize()).clamp(0.05, 1.0)
+                        };
+                        let w = (conf_w * angle_w) as f32;
+                        w_sum += w;
+                        d_sum += dist as f32 * w;
                     }
                     let idx = j * dims[2] + k;
                     if w_sum > 0.0 {
@@ -307,6 +325,175 @@ pub fn fuse(
         sdf,
         weight,
     })
+}
+
+/// Weight given to voxels synthesized by [`fill_holes`]: enough for the mesher
+/// to treat them as evidence, small enough to distinguish them from camera
+/// observations (whose weights are at least 1).
+const FILLED_WEIGHT: f32 = 0.5;
+
+/// Six-neighbour offsets.
+const NEIGHBOURS6: [(isize, isize, isize); 6] = [
+    (1, 0, 0),
+    (-1, 0, 0),
+    (0, 1, 0),
+    (0, -1, 0),
+    (0, 0, 1),
+    (0, 0, -1),
+];
+
+/// Fill unobserved voxels by **volumetric diffusion** (Davis et al. 2002).
+///
+/// Unobserved voxels adjacent to observed ones take the weighted mean of their
+/// observed neighbours; the front then advances one voxel per iteration, so
+/// small and medium holes in the signed distance field are closed before
+/// isosurface extraction. Values are computed from a snapshot and applied
+/// together, keeping the result independent of traversal order.
+///
+/// Returns the number of voxels filled.
+pub fn fill_holes(volume: &mut Volume, iterations: usize) -> usize {
+    if iterations == 0 || volume.weight.is_empty() {
+        return 0;
+    }
+    let dims = volume.dims;
+    let mut filled = 0usize;
+
+    let mut frontier: Vec<usize> = Vec::new();
+    for i in 0..dims[0] {
+        for j in 0..dims[1] {
+            for k in 0..dims[2] {
+                let idx = volume.index(i, j, k);
+                if volume.weight[idx] == 0.0 && has_known_neighbour(volume, i, j, k) {
+                    frontier.push(idx);
+                }
+            }
+        }
+    }
+
+    for _ in 0..iterations {
+        if frontier.is_empty() {
+            break;
+        }
+        // Snapshot: compute all means before writing any value.
+        let mut updates: Vec<(usize, f32)> = Vec::with_capacity(frontier.len());
+        for &idx in &frontier {
+            if volume.weight[idx] > 0.0 {
+                continue;
+            }
+            let (i, j, k) = unindex(dims, idx);
+            let mut sum = 0.0f32;
+            let mut count = 0u32;
+            for (di, dj, dk) in NEIGHBOURS6 {
+                if let Some(nbr) = neighbour_index(dims, i, j, k, di, dj, dk) {
+                    if volume.weight[nbr] > 0.0 {
+                        sum += volume.sdf[nbr];
+                        count += 1;
+                    }
+                }
+            }
+            if count > 0 {
+                updates.push((idx, sum / count as f32));
+            }
+        }
+        if updates.is_empty() {
+            break;
+        }
+        let mut next: Vec<usize> = Vec::new();
+        for &(idx, value) in &updates {
+            volume.sdf[idx] = value;
+            volume.weight[idx] = FILLED_WEIGHT;
+            filled += 1;
+            let (i, j, k) = unindex(dims, idx);
+            for (di, dj, dk) in NEIGHBOURS6 {
+                if let Some(nbr) = neighbour_index(dims, i, j, k, di, dj, dk) {
+                    if volume.weight[nbr] == 0.0 {
+                        next.push(nbr);
+                    }
+                }
+            }
+        }
+        next.sort_unstable();
+        next.dedup();
+        frontier = next;
+    }
+
+    filled
+}
+
+/// Box-filter the signed distance field over observed voxels.
+///
+/// Voxel-scale noise in the depth maps becomes pyramids and stair-steps in the
+/// extracted surface. Smoothing the *field* before isosurface extraction
+/// removes them at the source, which mesh smoothing cannot do as cheaply.
+/// Unobserved voxels stay untouched.
+pub fn smooth_volume(volume: &mut Volume, iterations: usize) {
+    for _ in 0..iterations {
+        let sdf = volume.sdf.clone();
+        let weight = volume.weight.clone();
+        let dims = volume.dims;
+        for i in 0..dims[0] {
+            for j in 0..dims[1] {
+                for k in 0..dims[2] {
+                    let idx = volume.index(i, j, k);
+                    if weight[idx] == 0.0 {
+                        continue;
+                    }
+                    let mut sum = sdf[idx];
+                    let mut count = 1.0f32;
+                    for (di, dj, dk) in NEIGHBOURS6 {
+                        if let Some(nbr) = neighbour_index(dims, i, j, k, di, dj, dk) {
+                            if weight[nbr] > 0.0 {
+                                sum += sdf[nbr];
+                                count += 1.0;
+                            }
+                        }
+                    }
+                    volume.sdf[idx] = sum / count;
+                }
+            }
+        }
+    }
+}
+
+/// Whether a grid point has at least one observed six-neighbour.
+fn has_known_neighbour(volume: &Volume, i: usize, j: usize, k: usize) -> bool {
+    NEIGHBOURS6.iter().any(|&(di, dj, dk)| {
+        neighbour_index(volume.dims, i, j, k, di, dj, dk)
+            .is_some_and(|nbr| volume.weight[nbr] > 0.0)
+    })
+}
+
+/// Flat index of the six-neighbour, or `None` outside the grid.
+fn neighbour_index(
+    dims: [usize; 3],
+    i: usize,
+    j: usize,
+    k: usize,
+    di: isize,
+    dj: isize,
+    dk: isize,
+) -> Option<usize> {
+    let ni = i as isize + di;
+    let nj = j as isize + dj;
+    let nk = k as isize + dk;
+    if ni < 0
+        || nj < 0
+        || nk < 0
+        || ni >= dims[0] as isize
+        || nj >= dims[1] as isize
+        || nk >= dims[2] as isize
+    {
+        return None;
+    }
+    Some((ni as usize * dims[1] + nj as usize) * dims[2] + nk as usize)
+}
+
+/// Grid coordinates of a flat index.
+fn unindex(dims: [usize; 3], idx: usize) -> (usize, usize, usize) {
+    let k = idx % dims[2];
+    let j = (idx / dims[2]) % dims[1];
+    let i = idx / (dims[1] * dims[2]);
+    (i, j, k)
 }
 
 #[cfg(test)]
@@ -336,6 +523,8 @@ mod tests {
             height,
             scale: 1.0,
             inv_depth: vec![1.0 / distance; width * height],
+            confidence: vec![1.0; width * height],
+            normals: vec![[0.0; 3]; width * height],
             neighbors: Vec::new(),
         }
     }
@@ -352,6 +541,7 @@ mod tests {
             resolution: 32,
             trunc_voxels: 4.0,
             depth_noise_relative: None,
+            ncc_min: 0.4,
         };
         let vol = fuse(&maps, &cameras, &views, &points, &cfg).unwrap();
 
@@ -378,6 +568,7 @@ mod tests {
             resolution: 32,
             trunc_voxels: 3.0,
             depth_noise_relative: None,
+            ncc_min: 0.4,
         };
         let vol = fuse(&maps, &cameras, &views, &points, &cfg).unwrap();
         let far_in_front = Vec3F64::new(0.0, 0.0, 2.0 - 10.0 * vol.voxel_size);
@@ -386,6 +577,73 @@ mod tests {
             1.0,
             "unobserved space reads as empty"
         );
+    }
+
+    #[test]
+    fn hole_filling_reduces_unobserved_voxels() {
+        let cameras = vec![cam()];
+        let views = vec![Some(Pose3d::IDENTITY)];
+        let maps = vec![Some(plane_depth(0, 2.0))];
+        let points = vec![[0.0, 0.0, 1.5], [0.0, 0.0, 2.5]];
+        let cfg = TsdfConfig {
+            resolution: 24,
+            trunc_voxels: 4.0,
+            depth_noise_relative: None,
+            ncc_min: 0.4,
+        };
+        let mut vol = fuse(&maps, &cameras, &views, &points, &cfg).unwrap();
+
+        // Punch a hole: forget a slab of grid points near the plane centre.
+        let mut removed = 0;
+        for i in 0..vol.dims[0] {
+            for j in 0..vol.dims[1] {
+                for k in 0..vol.dims[2] {
+                    let idx = vol.index(i, j, k);
+                    let p = vol.position(i, j, k);
+                    if vol.weight[idx] > 0.0 && (p.x.abs() < 0.08 && p.y.abs() < 0.08) {
+                        vol.weight[idx] = 0.0;
+                        removed += 1;
+                    }
+                }
+            }
+        }
+        assert!(removed > 0, "the test must actually create a hole");
+        let filled = fill_holes(&mut vol, 8);
+        assert!(filled > 0, "diffusion must fill something");
+        // The hole is bridged: the field is observed again where it was cut.
+        let mut still_missing = 0;
+        for i in 0..vol.dims[0] {
+            for j in 0..vol.dims[1] {
+                for k in 0..vol.dims[2] {
+                    let idx = vol.index(i, j, k);
+                    let p = vol.position(i, j, k);
+                    if p.x.abs() < 0.04
+                        && p.y.abs() < 0.04
+                        && (p.z - 2.0).abs() < 0.08
+                        && vol.weight[idx] == 0.0
+                    {
+                        still_missing += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(still_missing, 0, "the centre of the hole must be filled");
+    }
+
+    #[test]
+    fn hole_filling_is_zero_with_no_iterations() {
+        let cameras = vec![cam()];
+        let views = vec![Some(Pose3d::IDENTITY)];
+        let maps = vec![Some(plane_depth(0, 2.0))];
+        let points = vec![[0.0, 0.0, 1.8], [0.0, 0.0, 2.2]];
+        let cfg = TsdfConfig {
+            resolution: 16,
+            trunc_voxels: 4.0,
+            depth_noise_relative: None,
+            ncc_min: 0.4,
+        };
+        let mut vol = fuse(&maps, &cameras, &views, &points, &cfg).unwrap();
+        assert_eq!(fill_holes(&mut vol, 0), 0);
     }
 
     #[test]
@@ -398,6 +656,7 @@ mod tests {
             resolution: 24,
             trunc_voxels: 4.0,
             depth_noise_relative: None,
+            ncc_min: 0.4,
         };
         let vol = fuse(&maps, &cameras, &views, &points, &cfg).unwrap();
         let g = vol.gradient(Vec3F64::new(0.0, 0.0, 2.0));

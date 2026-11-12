@@ -414,6 +414,82 @@ pub fn vertex_colors(
         .collect()
 }
 
+/// Taubin smoothing (Taubin 1995).
+///
+/// Two alternating Laplacian passes — `lambda > 0` smooths, `mu < 0` cancels
+/// the shrinkage — so the surface loses voxel-scale noise without collapsing
+/// like plain Laplacian smoothing. Boundary vertices are pinned, keeping open
+/// scan borders from curling inward.
+///
+/// `lambda = 0.5`, `mu = -0.53` and five iterations are the textbook values.
+pub fn taubin_smooth(mesh: &Mesh, iterations: usize, lambda: f64, mu: f64) -> Mesh {
+    if iterations == 0 || mesh.positions.is_empty() {
+        return Mesh {
+            positions: mesh.positions.clone(),
+            faces: mesh.faces.clone(),
+        };
+    }
+    let n = mesh.positions.len();
+    let mut neighbours: Vec<Vec<u32>> = vec![Vec::new(); n];
+    let mut edge_use: HashMap<(u32, u32), u32> = HashMap::new();
+    for f in &mesh.faces {
+        for (u, v) in [(f[0], f[1]), (f[1], f[2]), (f[2], f[0])] {
+            if u == v {
+                continue;
+            }
+            neighbours[u as usize].push(v);
+            neighbours[v as usize].push(u);
+            let key = if u < v { (u, v) } else { (v, u) };
+            *edge_use.entry(key).or_default() += 1;
+        }
+    }
+    for list in &mut neighbours {
+        list.sort_unstable();
+        list.dedup();
+    }
+    // Boundary vertices (edge used once) stay put.
+    let mut pinned = vec![false; n];
+    for ((u, v), count) in &edge_use {
+        if *count != 2 {
+            pinned[*u as usize] = true;
+            pinned[*v as usize] = true;
+        }
+    }
+
+    let mut positions = mesh.positions.clone();
+    // One Jacobi Laplacian pass: displacement is computed from a snapshot and
+    // applied afterwards, so vertex order cannot change the result.
+    let pass = |positions: &mut Vec<Vec3F64>, weight: f64| {
+        let displacement: Vec<Vec3F64> = positions
+            .iter()
+            .enumerate()
+            .map(|(v, p)| {
+                if pinned[v] || neighbours[v].is_empty() {
+                    return Vec3F64::ZERO;
+                }
+                let sum = neighbours[v]
+                    .iter()
+                    .fold(Vec3F64::ZERO, |acc, &u| acc + positions[u as usize]);
+                let mean = sum / neighbours[v].len() as f64;
+                (mean - *p) * weight
+            })
+            .collect();
+        for (v, d) in displacement.into_iter().enumerate() {
+            positions[v] += d;
+        }
+    };
+
+    for _ in 0..iterations {
+        pass(&mut positions, lambda);
+        pass(&mut positions, mu);
+    }
+
+    Mesh {
+        positions,
+        faces: mesh.faces.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,5 +602,56 @@ mod tests {
         assert_eq!(cleaned.face_count(), 2, "the lone triangle is dropped");
         assert_eq!(cleaned.vertex_count(), 4, "its vertices are compacted away");
         assert_eq!(cleaned.connected_components(), 1);
+    }
+
+    #[test]
+    fn taubin_smoothing_reduces_noise_without_shrinking() {
+        let vol = sphere_volume(40, 0.1, 1.23, 0.4);
+        let mesh = marching_tetrahedra(&vol);
+        // Deterministic radial jitter, like a noisy TSDF surface.
+        let noisy = Mesh {
+            positions: mesh
+                .positions
+                .iter()
+                .enumerate()
+                .map(|(i, p)| *p * (1.0 + 0.04 * (i as f64 * 0.7).sin()))
+                .collect(),
+            faces: mesh.faces.clone(),
+        };
+        let radius = |m: &Mesh| -> (f64, f64) {
+            let n = m.positions.len() as f64;
+            let mean = m.positions.iter().map(|p| p.length()).sum::<f64>() / n;
+            let var = m
+                .positions
+                .iter()
+                .map(|p| (p.length() - mean).powi(2))
+                .sum::<f64>()
+                / n;
+            (mean, var.sqrt())
+        };
+        let (mean_before, std_before) = radius(&noisy);
+        let smoothed = taubin_smooth(&noisy, 5, 0.5, -0.53);
+        let (mean_after, std_after) = radius(&smoothed);
+
+        assert!(
+            std_after < 0.6 * std_before,
+            "noise should drop: {std_before:.4} -> {std_after:.4}"
+        );
+        assert!(
+            (mean_after - mean_before).abs() < 0.02 * mean_before,
+            "Taubin must not shrink: {mean_before:.4} -> {mean_after:.4}"
+        );
+        assert!(smoothed.is_closed(), "topology must be preserved");
+        assert_eq!(smoothed.face_count(), noisy.face_count());
+    }
+
+    #[test]
+    fn taubin_zero_iterations_is_a_copy() {
+        let mesh = Mesh {
+            positions: vec![Vec3F64::ZERO],
+            faces: vec![],
+        };
+        let same = taubin_smooth(&mesh, 0, 0.5, -0.53);
+        assert_eq!(same.positions, mesh.positions);
     }
 }
