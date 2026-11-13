@@ -113,6 +113,7 @@ mesh is open and split into patches. See the TAI report for the failure modes.
 | `--geo-verify` | RANSAC epipolar verification |
 | `--sprt` | SPRT early rejection during PnP |
 | `--sparse-only` | stop after the sparse cloud |
+| `--remove-plane` | RANSAC-remove the dominant plane (table/floor) before fusion |
 | `--dense-scale` | depth-map resolution relative to source (0.5 default) |
 | `--dense-planes` / `--dense-neighbors` / `--ncc-min` | plane-sweep quality knobs |
 | `--voxel-resolution` / `--trunc-voxels` | TSDF resolution and band width |
@@ -163,5 +164,9 @@ kornia-3d = { git = "https://github.com/AdarshGuptaa/kornia-rs.git", branch = "s
 - The dense stage ignores lens distortion (a warning is printed if the solve
   fitted a large one).
 - Background inside the reconstruction volume is meshed too (no segmentation).
+- **Textureless objects fail the dense stage.** The `lip_balm.mp4` test registers
+  66/68 views in the close-up segment (good sparse SfM, 2.05 px RMSE) but the
+  dense depth error is 16.8 %: the white tube and plain table have no texture
+  for NCC. Sparse works; dense needs surface texture.
 - On the supplied specular knife clip the mesh remains fragmented: the ceiling
   is the capture, not the solver (see the TAI report's Path-1/Path-2 results).

@@ -663,6 +663,83 @@ pub(crate) fn sample_rgb_bilinear(
     Some(out)
 }
 
+/// Remove the dominant plane (e.g. a tabletop) from a dense cloud.
+///
+/// Fits a plane with deterministic RANSAC and drops every point within
+/// `tolerance` of it. Reconstruction volumes are otherwise dominated by the
+/// support surface, wasting resolution and meshing the table instead of the
+/// object.
+///
+/// Returns the number of points removed.
+pub fn remove_dominant_plane(cloud: &mut DenseCloud, tolerance: f64) -> usize {
+    let points = &cloud.points;
+    let n = points.len();
+    if n < 3 || tolerance <= 0.0 {
+        return 0;
+    }
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = || {
+        // xorshift64*: deterministic, no external RNG dependency.
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        state.wrapping_mul(0x2545_f491_4f6c_dd1d) as usize % n
+    };
+
+    let mut best_normal = [0.0f64; 3];
+    let mut best_d = 0.0f64;
+    let mut best_inliers = 0usize;
+    for _ in 0..200 {
+        let (a, b, c) = (points[next()], points[next()], points[next()]);
+        let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        let nrm = [
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        ];
+        let len = (nrm[0] * nrm[0] + nrm[1] * nrm[1] + nrm[2] * nrm[2]).sqrt();
+        if len < 1e-12 {
+            continue;
+        }
+        let normal = [nrm[0] / len, nrm[1] / len, nrm[2] / len];
+        let d = -(normal[0] * a[0] + normal[1] * a[1] + normal[2] * a[2]);
+        let mut inliers = 0usize;
+        for p in points {
+            let dist = (normal[0] * p[0] + normal[1] * p[1] + normal[2] * p[2] + d).abs();
+            if dist <= tolerance {
+                inliers += 1;
+            }
+        }
+        if inliers > best_inliers {
+            best_inliers = inliers;
+            best_normal = normal;
+            best_d = d;
+        }
+    }
+    if best_inliers < n / 10 {
+        return 0; // no plane explains a meaningful share of the cloud
+    }
+
+    let mut keep = Vec::with_capacity(n);
+    let mut points_out = Vec::with_capacity(n - best_inliers);
+    let mut colors_out = Vec::with_capacity(n - best_inliers);
+    for (i, p) in points.iter().enumerate() {
+        let dist =
+            (best_normal[0] * p[0] + best_normal[1] * p[1] + best_normal[2] * p[2] + best_d).abs();
+        let is_plane = dist <= tolerance;
+        keep.push(!is_plane);
+        if !is_plane {
+            points_out.push(*p);
+            colors_out.push(cloud.colors[i]);
+        }
+    }
+    let removed = n - points_out.len();
+    cloud.points = points_out;
+    cloud.colors = colors_out;
+    removed
+}
+
 /// Downsample a dense cloud with the kornia-3d sparse voxel grid.
 ///
 /// `voxel_size` is in world units; one point (and its colour) survives per
@@ -766,6 +843,27 @@ mod tests {
         ];
         let n = select_neighbors(&views, 0, 2);
         assert_eq!(n, vec![1, 3]);
+    }
+
+    #[test]
+    fn dominant_plane_removal_keeps_the_object() {
+        let mut points = Vec::new();
+        // A tabletop at z = 0 (200 points) plus a blob above it (50 points).
+        for i in 0..200 {
+            let x = (i % 20) as f64 * 0.1;
+            let y = (i / 20) as f64 * 0.1;
+            points.push([x, y, 0.0]);
+        }
+        for i in 0..50 {
+            let t = i as f64 * 0.02;
+            points.push([0.5 + t.sin() * 0.05, 0.5 + t.cos() * 0.05, 0.3 + t]);
+        }
+        let colors = vec![[10, 20, 30]; points.len()];
+        let mut cloud = DenseCloud { points, colors };
+        let removed = remove_dominant_plane(&mut cloud, 0.02);
+        assert_eq!(removed, 200, "the tabletop must be removed");
+        assert_eq!(cloud.points.len(), 50, "the object must survive");
+        assert!(cloud.points.iter().all(|p| p[2] > 0.1));
     }
 
     #[test]

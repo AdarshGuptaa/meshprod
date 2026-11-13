@@ -132,7 +132,12 @@ explained — it is recorded as an open issue rather than hidden.
   the mesh splits into 18 patches with open boundaries instead of one closed
   surface. Classical photo-consistency assumes a Lambertian surface.
 - **Textureless regions** (plain handles/background) yield no SIFT features
-  and no depth.
+  and no depth. Measured on `lip_balm.mp4` (18–27 s segment): **66/68 views
+  register** and sparse RMSE is 2.05 px, but dense depth error is **16.8 %
+  median** — the white tube and red table have no texture for NCC. Sparse
+  succeeds, dense fails; the mesh is fragmented. This is the cleanest
+  demonstration in the project that the dense stage is texture-bound, not
+  geometry-bound.
 - **Partial coverage**: only 22/63 views register, so the surface is open
   (Euler −141, 7,071 boundary edges). "Closed mesh" is *not* claimed.
 - **No distortion model in the dense stage**: the sweep is a pure pinhole

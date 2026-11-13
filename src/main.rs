@@ -149,6 +149,10 @@ struct Args {
     #[argh(switch)]
     sparse_only: bool,
 
+    /// remove the dominant plane (table, floor) from the dense cloud before fusion
+    #[argh(switch)]
+    remove_plane: bool,
+
     /// dense depth-map resolution relative to the source (0.5 = half)
     #[argh(option, default = "0.5")]
     dense_scale: f64,
@@ -443,6 +447,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         reconstruction.reproj_rmse_px,
         t.elapsed().as_secs_f64(),
     );
+    let registered_frames: Vec<usize> = reconstruction
+        .views
+        .iter()
+        .enumerate()
+        .filter_map(|(i, v)| v.as_ref().map(|_| i * args.frame_step))
+        .collect();
+    eprintln!("  registered source frames: {registered_frames:?}");
     if let Some((gamma, k1, k2, p1, p2)) = reconstruction.camera_correction {
         eprintln!(
             "[5/9] refined intrinsics: gamma {gamma:.4} (fx ~ {:.1} px), k1 {k1:.4}, k2 {k2:.4}, \
@@ -517,7 +528,25 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
     }
 
-    let cloud = dense::dense_cloud(&maps, &cameras, &reconstruction.views, &rgb_frames);
+    let mut cloud = dense::dense_cloud(&maps, &cameras, &reconstruction.views, &rgb_frames);
+    if args.remove_plane && cloud.points.len() >= 16 {
+        let mut lo = cloud.points[0];
+        let mut hi = cloud.points[0];
+        for p in &cloud.points {
+            for a in 0..3 {
+                lo[a] = lo[a].min(p[a]);
+                hi[a] = hi[a].max(p[a]);
+            }
+        }
+        let diagonal =
+            ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt();
+        let t = Instant::now();
+        let removed = dense::remove_dominant_plane(&mut cloud, 0.01 * diagonal.max(1e-9));
+        eprintln!(
+            "  removed dominant plane: {removed} points in {:.1}s",
+            t.elapsed().as_secs_f64()
+        );
+    }
     eprintln!("  dense cloud: {} points", cloud.points.len());
 
     // 7. Fuse the depth maps into a signed distance field.
