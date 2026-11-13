@@ -12,6 +12,7 @@
 //! stderr so slow stages can be identified.
 
 mod dense;
+mod dense_sgm;
 mod features;
 mod matching;
 mod mesh;
@@ -33,6 +34,7 @@ use std::time::Instant;
 use argh::FromArgs;
 use kornia_algebra::Vec3F64;
 use kornia_calib::build_tracks;
+use kornia_image::Image;
 
 #[derive(FromArgs)]
 /// Structure-from-Motion from a video file to a simplified triangle mesh.
@@ -205,6 +207,26 @@ struct Args {
     /// drop connected surface patches smaller than this many faces (0 = keep all)
     #[argh(option, default = "200")]
     min_component_faces: usize,
+
+    /// photometric cost: "ncc", "census" or "sgm" (default ncc)
+    #[argh(option)]
+    cost: Option<dense::CostMethod>,
+
+    /// cardinal SGM paths (1..=4)
+    #[argh(option, default = "4")]
+    sgm_paths: usize,
+
+    /// derive dense/mesh parameters from the measured frame texture
+    #[argh(switch)]
+    auto_config: bool,
+
+    /// keep only the largest connected component of the dense cloud
+    #[argh(switch)]
+    auto_crop: bool,
+
+    /// translate the outputs so their centre is the world origin
+    #[argh(switch)]
+    recenter: bool,
 }
 
 /// Validate CLI values that must be positive.
@@ -495,7 +517,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         args.cy,
         n_frames,
     );
-    let dense_cfg = dense::DenseConfig {
+    let mut dense_cfg = dense::DenseConfig {
         scale: args.dense_scale,
         planes: args.dense_planes,
         window: args.dense_window,
@@ -503,7 +525,47 @@ fn main() -> Result<(), Box<dyn Error>> {
         neighbors: args.dense_neighbors,
         lr_tolerance: 0.05,
         lr_required: args.lr_required,
+        method: args.cost.unwrap_or(dense::CostMethod::Ncc),
+        sgm_paths: args.sgm_paths,
+        census_max_cost: 0.35,
     };
+    let mut target_faces = args.target_faces;
+    let mut min_component_faces = args.min_component_faces;
+    if args.auto_config {
+        let score = texture_score(&gray_frames);
+        let (low, medium) = (score < 0.012, score < 0.035);
+        let auto_method = if low {
+            dense::CostMethod::Sgm
+        } else if medium {
+            dense::CostMethod::Census
+        } else {
+            dense::CostMethod::Ncc
+        };
+        let method = args.cost.unwrap_or(auto_method);
+        dense_cfg.method = method;
+        dense_cfg.window = if low || medium { 7 } else { 5 };
+        dense_cfg.ncc_min = if low {
+            0.30
+        } else if medium {
+            0.35
+        } else {
+            0.40
+        };
+        dense_cfg.planes = if low { 128 } else { 96 };
+        eprintln!(
+            "[auto] texture score {score:.4} ({}) -> cost {method:?}, window {}, ncc-min {:.2}, planes {}",
+            if low {
+                "low"
+            } else if medium {
+                "medium"
+            } else {
+                "high"
+            },
+            dense_cfg.window,
+            dense_cfg.ncc_min,
+            dense_cfg.planes
+        );
+    }
     let maps = dense::estimate_depth_maps(&reconstruction, &cameras, &gray_frames, &dense_cfg)?;
     let n_maps = maps.iter().flatten().count();
     let n_valid: usize = maps
@@ -545,6 +607,32 @@ fn main() -> Result<(), Box<dyn Error>> {
         eprintln!(
             "  removed dominant plane: {removed} points in {:.1}s",
             t.elapsed().as_secs_f64()
+        );
+    }
+    if args.auto_crop && cloud.points.len() >= 16 {
+        let (mut lo, mut hi) = (cloud.points[0], cloud.points[0]);
+        for p in &cloud.points {
+            for a in 0..3 {
+                lo[a] = lo[a].min(p[a]);
+                hi[a] = hi[a].max(p[a]);
+            }
+        }
+        let diagonal =
+            ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt();
+        let t = Instant::now();
+        let removed = dense::auto_crop_largest(&mut cloud, (diagonal / 48.0).max(1e-9));
+        eprintln!(
+            "  auto-crop: removed {removed} background points, {} remain in {:.1}s",
+            cloud.points.len(),
+            t.elapsed().as_secs_f64()
+        );
+    }
+    if args.auto_config && !cloud.points.is_empty() {
+        target_faces = (cloud.points.len() / 20).clamp(10_000, 150_000);
+        min_component_faces = (target_faces / 500).max(200);
+        eprintln!(
+            "[auto] {} dense points -> target-faces {target_faces}, min-component-faces {min_component_faces}",
+            cloud.points.len()
         );
     }
     eprintln!("  dense cloud: {} points", cloud.points.len());
@@ -623,8 +711,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .into(),
         );
     }
-    if args.min_component_faces > 0 {
-        mesh = mesh.remove_small_components(args.min_component_faces);
+    if min_component_faces > 0 {
+        mesh = mesh.remove_small_components(min_component_faces);
         eprintln!(
             "  removed small patches: {} faces in {} patches remain",
             mesh.face_count(),
@@ -642,8 +730,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             mesh.euler_characteristic()
         );
     }
-    if args.target_faces > 0 && mesh.face_count() > args.target_faces {
-        mesh = simplify::simplify(&mesh, args.target_faces);
+    if target_faces > 0 && mesh.face_count() > target_faces {
+        mesh = simplify::simplify(&mesh, target_faces);
         eprintln!("  simplified to {} faces", mesh.face_count());
     }
     let normals = mesh::vertex_normals(&mesh, &volume);
@@ -654,6 +742,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         &reconstruction.views,
         &rgb_frames,
     );
+    let recenter = args.recenter || args.auto_crop;
+    let shift = if recenter && !mesh.positions.is_empty() {
+        let n = mesh.positions.len() as f64;
+        let centre = mesh.positions.iter().fold(Vec3F64::ZERO, |acc, p| acc + *p) / n;
+        for p in &mut mesh.positions {
+            *p -= centre;
+        }
+        eprintln!(
+            "  recentred to origin (shift {:.2}, {:.2}, {:.2})",
+            centre.x, centre.y, centre.z
+        );
+        centre
+    } else {
+        Vec3F64::ZERO
+    };
     mesh_ply::write_mesh_ply(&args.output, &mesh, &normals, &colors)?;
     eprintln!(
         "[9/9] wrote mesh ({} vertices, {} faces, patches={}, euler={}, closed={}) to {} in {:.1}s",
@@ -673,7 +776,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .iter()
         .zip(&down.colors)
         .map(|(p, c)| ply_writer::Vertex {
-            position: *p,
+            position: [p[0] - shift.x, p[1] - shift.y, p[2] - shift.z],
             color: *c,
             normal: volume.gradient(Vec3F64::new(p[0], p[1], p[2])).to_array(),
         })
@@ -694,7 +797,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .iter()
         .zip(&oriented.colors)
         .map(|(p, c)| ply_writer::Vertex {
-            position: *p,
+            position: [p[0] - shift.x, p[1] - shift.y, p[2] - shift.z],
             color: *c,
             normal: volume.gradient(Vec3F64::new(p[0], p[1], p[2])).to_array(),
         })
@@ -721,6 +824,37 @@ fn sibling_path(output: &Path, suffix: &str) -> PathBuf {
         .map(|e| format!(".{}", e.to_string_lossy()))
         .unwrap_or_default();
     output.with_file_name(format!("{stem}{suffix}{ext}"))
+}
+
+/// Mean image gradient magnitude, normalized to `[0, 1]` — a texture proxy.
+///
+/// Textured scenes land above ~0.04; smooth objects (white plastic, painted
+/// walls) and flat backgrounds stay below ~0.015, which is where NCC stops
+/// working and census/SGM pay off.
+fn texture_score(frames: &[Image<u8, 1>]) -> f64 {
+    let stride = (frames.len() / 8).max(1);
+    let mut sum = 0.0f64;
+    let mut count = 0.0f64;
+    for frame in frames.iter().step_by(stride).take(8) {
+        let (w, h) = (frame.width(), frame.height());
+        if w < 3 || h < 3 {
+            continue;
+        }
+        let s = frame.as_slice();
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
+                let gx = (s[y * w + x + 1] as f64 - s[y * w + x - 1] as f64).abs();
+                let gy = (s[(y + 1) * w + x] as f64 - s[(y - 1) * w + x] as f64).abs();
+                sum += gx + gy;
+                count += 1.0;
+            }
+        }
+    }
+    if count == 0.0 {
+        0.0
+    } else {
+        (sum / count) / 255.0
+    }
 }
 
 /// Cameras for the dense stage, corrected by the intrinsics bundle adjustment

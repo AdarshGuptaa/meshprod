@@ -82,6 +82,32 @@ recover geometry the input never observed. The conclusion is a *data-bound*
 result, not a solver failure — on a complete, matte capture Poisson is the
 better backend, and the script is kept for that case.
 
+### 2.1c Low-texture costs and auto-config (Path 1.5)
+
+`lip_balm.mp4` (18–27 s segment, 66/68 views, sparse RMSE 2.05 px):
+
+| Cost | Depth median / p90 | Raw faces | Patches after cleanup |
+|---|---|---|---|
+| NCC (previous) | 16.8 % / 92 % | 115,881 | 68 |
+| Census WTA (auto-selected, texture 0.021) | 20.5 % / 94 % | 231,520 | 61 |
+| Census + SGM (4 paths) | **19.0 % / 77 %** | 334,898 | **43** |
+
+SGM measurably reduces the depth tail (p90 94 % → 77 %) and fragmentation
+(61 → 43 patches), but a white, untextured tube remains below the quality bar.
+On the textured knife clip auto-config scores the texture at 0.038 (high),
+correctly keeps NCC, and yields 34 patches / Euler −104 — parity with the
+hand-tuned configuration.
+
+**Auto-config** is rule-based, not learned: mean image gradient → cost, window,
+NCC threshold and plane count; dense-point count → face budget and minimum
+patch size. Every choice is logged with the statistic that drove it, which is
+the transparent counterpart to a black-box tuner.
+
+**Negative result — auto-crop:** on the noisy knife cloud the largest
+26-connected voxel cluster is a sub-region, so cropping shrank the scene and
+fragmented the mesh (6 tiny islands). It is opt-in and documented as needing a
+clean cloud (after plane removal) or a segmented object.
+
 ### 2.2 Repeatability (determinism)
 
 Two independent full runs produced **byte-identical** outputs:

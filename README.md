@@ -16,7 +16,9 @@ phone MP4 ─► frames ─► sparse SfM ─► dense depth ─► TSDF fusion 
 | SIFT/ORB features + matching + geometric verification | ✅ |
 | Sparse reconstruction (`kornia-calib::reconstruct`) | ✅ |
 | Sparse PLY (XYZ + RGB + normals) | ✅ |
-| Dense depth (plane sweep, NCC, multi-view consistency) | ✅ |
+| Dense depth (plane sweep; NCC, Census or SGM cost) | ✅ |
+| Auto-config from measured texture | ✅ |
+| Auto-crop (largest voxel cluster) + recentering | ✅ |
 | TSDF fusion (confidence- and view-angle-weighted votes) | ✅ |
 | Field smoothing + Taubin mesh smoothing | ✅ |
 | Marching-tetrahedra mesh extraction | ✅ |
@@ -116,6 +118,11 @@ mesh is open and split into patches. See the TAI report for the failure modes.
 | `--remove-plane` | RANSAC-remove the dominant plane (table/floor) before fusion |
 | `--dense-scale` | depth-map resolution relative to source (0.5 default) |
 | `--dense-planes` / `--dense-neighbors` / `--ncc-min` | plane-sweep quality knobs |
+| `--cost ncc\|census\|sgm` | photometric cost (SGM regularizes low-texture regions) |
+| `--sgm-paths` | cardinal SGM paths (default 4) |
+| `--auto-config` | derive cost/window/NCC/planes and mesh budget from frame texture |
+| `--auto-crop` | keep only the largest 26-connected voxel cluster |
+| `--recenter` | translate outputs so their centre is the origin |
 | `--voxel-resolution` / `--trunc-voxels` | TSDF resolution and band width |
 | `--lr-required` | neighbours that must agree on a depth (default 1) |
 | `--volume-smoothing` | TSDF box-filter iterations before meshing (default 2) |
@@ -164,9 +171,13 @@ kornia-3d = { git = "https://github.com/AdarshGuptaa/kornia-rs.git", branch = "s
 - The dense stage ignores lens distortion (a warning is printed if the solve
   fitted a large one).
 - Background inside the reconstruction volume is meshed too (no segmentation).
-- **Textureless objects fail the dense stage.** The `lip_balm.mp4` test registers
-  66/68 views in the close-up segment (good sparse SfM, 2.05 px RMSE) but the
-  dense depth error is 16.8 %: the white tube and plain table have no texture
-  for NCC. Sparse works; dense needs surface texture.
+- **Textureless objects are hard even with Census/SGM.** `lip_balm.mp4`
+  (66/68 views registered, 2.05 px RMSE) goes from 16.8 % to 19–20 % dense
+  depth error; SGM improves the fragmentation from 61 to 43 patches, but the
+  white tube still lacks the signal. Sparse works; dense needs texture or a
+  stronger prior (depth network / projected pattern).
+- **`--auto-crop` needs a clean cloud.** On the noisy knife cloud the largest
+  voxel cluster is a sub-region, shrinking the scene; use it after
+  `--remove-plane` on well-behaved captures.
 - On the supplied specular knife clip the mesh remains fragmented: the ceiling
   is the capture, not the solver (see the TAI report's Path-1/Path-2 results).

@@ -15,6 +15,34 @@ use kornia_calib::Reconstruction;
 use kornia_image::Image;
 use rayon::prelude::*;
 
+use crate::dense_sgm::{census_at, compute_census, hamming, sgm_aggregate, CensusMap};
+
+/// Photometric cost used by the plane sweep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CostMethod {
+    /// Normalized cross-correlation (classic, needs texture).
+    Ncc,
+    /// Census Hamming distance, winner-takes-all.
+    Census,
+    /// Census + semi-global matching (fills low-texture regions).
+    Sgm,
+}
+
+impl std::str::FromStr for CostMethod {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "ncc" => Ok(CostMethod::Ncc),
+            "census" => Ok(CostMethod::Census),
+            "sgm" => Ok(CostMethod::Sgm),
+            _ => Err(format!(
+                "unknown cost: {s} (expected 'ncc', 'census' or 'sgm')"
+            )),
+        }
+    }
+}
+
 /// Tunables for the plane sweep.
 pub struct DenseConfig {
     /// Depth-map resolution relative to the source frame (0.5 = half).
@@ -32,6 +60,12 @@ pub struct DenseConfig {
     /// How many neighbours must independently agree on a depth (COLMAP-style
     /// geometric consistency; 1 = the old behaviour).
     pub lr_required: usize,
+    /// Photometric cost.
+    pub method: CostMethod,
+    /// Cardinal SGM paths (1..=4); only used by [`CostMethod::Sgm`].
+    pub sgm_paths: usize,
+    /// Maximum mean census Hamming distance (0..1) accepted as a depth.
+    pub census_max_cost: f32,
 }
 
 impl Default for DenseConfig {
@@ -44,6 +78,9 @@ impl Default for DenseConfig {
             neighbors: 3,
             lr_tolerance: 0.05,
             lr_required: 2,
+            method: CostMethod::Ncc,
+            sgm_paths: 4,
+            census_max_cost: 0.35,
         }
     }
 }
@@ -384,6 +421,176 @@ fn sweep_view(
     })
 }
 
+/// Census (optionally SGM-regularized) plane sweep for one view.
+#[allow(clippy::too_many_arguments)]
+fn sweep_view_census(
+    view: usize,
+    gray_frames: &[Image<u8, 1>],
+    cameras: &[PinholeCamera],
+    views: &[Option<Pose3d>],
+    reconstruction: &Reconstruction,
+    cfg: &DenseConfig,
+    census: &[CensusMap],
+) -> Option<DepthMap> {
+    let ref_pose = views[view]?;
+    let ref_cam = &cameras[view];
+    let neighbours = select_neighbors(views, view, cfg.neighbors);
+    if neighbours.is_empty() {
+        return None;
+    }
+    let (src_w, src_h) = (gray_frames[view].width(), gray_frames[view].height());
+    let scale = cfg.scale.clamp(0.1, 1.0);
+    let width = ((src_w as f64 * scale).round() as usize).max(2);
+    let height = ((src_h as f64 * scale).round() as usize).max(2);
+    let (d_min, d_max) = depth_range(
+        &reconstruction.points,
+        &ref_pose.inverse(),
+        ref_pose.translation,
+    );
+    let planes = cfg.planes.max(2);
+    let rho_at = |plane: usize| {
+        let f = if planes > 1 {
+            plane as f64 / (planes - 1) as f64
+        } else {
+            0.0
+        };
+        1.0 / (d_max - (d_max - d_min) * f).max(1e-9)
+    };
+
+    let rel: Vec<(usize, Mat3F64, Vec3F64)> = neighbours
+        .iter()
+        .map(|&j| {
+            let (r, t) = relative_rt(&ref_pose, &views[j].expect("registered neighbour"));
+            (j, r, t)
+        })
+        .collect();
+    let ref_census = &census[view];
+
+    // Mean census Hamming over a 3x3 window, averaged over the neighbours.
+    let pixel_cost = |sx: f64, sy: f64, rho: f64| -> Option<f32> {
+        let mut total = 0.0f32;
+        let mut used = 0.0f32;
+        for &(j, ref r, ref t) in &rel {
+            let h = plane_homography(ref_cam, &cameras[j], r, t, rho);
+            let Some((nx, ny)) = apply_homography(&h, sx, sy) else {
+                continue;
+            };
+            let mut sum = 0.0f32;
+            let mut n = 0.0f32;
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    let ox = dx as f64 / scale;
+                    let oy = dy as f64 / scale;
+                    let Some(a) = census_at(ref_census, sx + ox, sy + oy) else {
+                        continue;
+                    };
+                    let Some(b) = census_at(&census[j], nx + ox, ny + oy) else {
+                        continue;
+                    };
+                    sum += hamming(a, b) as f32 / 24.0;
+                    n += 1.0;
+                }
+            }
+            if n > 0.0 {
+                total += sum / n;
+                used += 1.0;
+            }
+        }
+        (used > 0.0).then(|| total / used)
+    };
+
+    let mut inv_depth = vec![0.0f32; width * height];
+    let mut confidence = vec![0.0f32; width * height];
+
+    if cfg.method == CostMethod::Sgm {
+        let mut cost = vec![f32::MAX; width * height * planes];
+        cost.par_chunks_mut(width * planes)
+            .enumerate()
+            .for_each(|(row, slice)| {
+                let sy = row as f64 / scale;
+                for col in 0..width {
+                    let sx = col as f64 / scale;
+                    for plane in 0..planes {
+                        slice[col * planes + plane] =
+                            pixel_cost(sx, sy, rho_at(plane)).unwrap_or(1.0);
+                    }
+                }
+            });
+        let mut agg = vec![0.0f32; cost.len()];
+        sgm_aggregate(
+            &cost,
+            width,
+            height,
+            planes,
+            0.02,
+            0.12,
+            cfg.sgm_paths.max(1),
+            &mut agg,
+        );
+        inv_depth
+            .par_chunks_mut(width)
+            .zip(confidence.par_chunks_mut(width))
+            .enumerate()
+            .for_each(|(row, (out_row, conf_row))| {
+                for col in 0..width {
+                    let base = (row * width + col) * planes;
+                    let mut best = f32::INFINITY;
+                    let mut best_plane = 0usize;
+                    for plane in 0..planes {
+                        let c = agg[base + plane];
+                        if c < best {
+                            best = c;
+                            best_plane = plane;
+                        }
+                    }
+                    // Validate on the RAW cost: the aggregated one is not in [0, 1].
+                    let raw = cost[base + best_plane];
+                    if raw <= cfg.census_max_cost {
+                        out_row[col] = rho_at(best_plane) as f32;
+                        conf_row[col] = 1.0 - raw;
+                    }
+                }
+            });
+    } else {
+        inv_depth
+            .par_chunks_mut(width)
+            .zip(confidence.par_chunks_mut(width))
+            .enumerate()
+            .for_each(|(row, (out_row, conf_row))| {
+                let sy = row as f64 / scale;
+                for col in 0..width {
+                    let sx = col as f64 / scale;
+                    let mut best = f32::INFINITY;
+                    let mut best_rho = 0.0f64;
+                    for plane in 0..planes {
+                        let rho = rho_at(plane);
+                        if let Some(c) = pixel_cost(sx, sy, rho) {
+                            if c < best {
+                                best = c;
+                                best_rho = rho;
+                            }
+                        }
+                    }
+                    if best <= cfg.census_max_cost && best_rho > 0.0 {
+                        out_row[col] = best_rho as f32;
+                        conf_row[col] = 1.0 - best;
+                    }
+                }
+            });
+    }
+
+    Some(DepthMap {
+        view,
+        width,
+        height,
+        scale,
+        inv_depth,
+        confidence,
+        normals: vec![[0.0; 3]; width * height],
+        neighbors: neighbours,
+    })
+}
+
 /// Estimate depth maps for every registered view.
 ///
 /// The returned vector is indexed by frame; unregistered views hold `None`.
@@ -405,20 +612,58 @@ pub fn estimate_depth_maps(
 
     let mut maps: Vec<Option<DepthMap>> = (0..reconstruction.views.len()).map(|_| None).collect();
 
-    let computed: Vec<(usize, DepthMap)> = registered
-        .par_iter()
-        .filter_map(|&i| {
-            sweep_view(
-                i,
-                gray_frames,
-                cameras,
-                &reconstruction.views,
-                reconstruction,
-                cfg,
-            )
-            .map(|m| (i, m))
-        })
-        .collect();
+    let census: Vec<CensusMap> = if cfg.method == CostMethod::Ncc {
+        Vec::new()
+    } else {
+        gray_frames.iter().map(compute_census).collect()
+    };
+
+    let computed: Vec<(usize, DepthMap)> = if cfg.method == CostMethod::Sgm {
+        // SGM keeps a per-view cost volume (~40-80 MB); run views
+        // sequentially to bound peak memory.
+        registered
+            .iter()
+            .filter_map(|&i| {
+                sweep_view_census(
+                    i,
+                    gray_frames,
+                    cameras,
+                    &reconstruction.views,
+                    reconstruction,
+                    cfg,
+                    &census,
+                )
+                .map(|m| (i, m))
+            })
+            .collect()
+    } else {
+        registered
+            .par_iter()
+            .filter_map(|&i| {
+                if cfg.method == CostMethod::Ncc {
+                    sweep_view(
+                        i,
+                        gray_frames,
+                        cameras,
+                        &reconstruction.views,
+                        reconstruction,
+                        cfg,
+                    )
+                } else {
+                    sweep_view_census(
+                        i,
+                        gray_frames,
+                        cameras,
+                        &reconstruction.views,
+                        reconstruction,
+                        cfg,
+                        &census,
+                    )
+                }
+                .map(|m| (i, m))
+            })
+            .collect()
+    };
     for (i, m) in computed {
         maps[i] = Some(m);
     }
@@ -663,6 +908,82 @@ pub(crate) fn sample_rgb_bilinear(
     Some(out)
 }
 
+/// Keep only the largest 26-connected cluster of the dense cloud.
+///
+/// Voxelizes the cloud, flood-fills occupied voxels, and drops every point
+/// that does not belong to the biggest component — the background, table
+/// remnants and floating noise — leaving one object. `voxel` should be a few
+/// times the TSDF voxel size.
+///
+/// Returns the number of points removed.
+pub fn auto_crop_largest(cloud: &mut DenseCloud, voxel: f64) -> usize {
+    use std::collections::{HashMap, VecDeque};
+    if cloud.points.len() < 16 || voxel <= 0.0 {
+        return 0;
+    }
+    let key = |p: &[f64; 3]| -> (i32, i32, i32) {
+        (
+            (p[0] / voxel).floor() as i32,
+            (p[1] / voxel).floor() as i32,
+            (p[2] / voxel).floor() as i32,
+        )
+    };
+    let mut buckets: HashMap<(i32, i32, i32), Vec<usize>> = HashMap::new();
+    for (i, p) in cloud.points.iter().enumerate() {
+        buckets.entry(key(p)).or_default().push(i);
+    }
+    let mut keys: Vec<(i32, i32, i32)> = buckets.keys().copied().collect();
+    keys.sort_unstable();
+
+    let mut visited: std::collections::HashSet<(i32, i32, i32)> = std::collections::HashSet::new();
+    let mut best: Vec<(i32, i32, i32)> = Vec::new();
+    let mut best_size = 0usize;
+    // Deterministic order: sorted keys, fixed neighbour offsets.
+    for start in &keys {
+        if !visited.insert(*start) {
+            continue;
+        }
+        let mut component = Vec::new();
+        let mut size = 0usize;
+        let mut queue = VecDeque::new();
+        queue.push_back(*start);
+        while let Some(k) = queue.pop_front() {
+            component.push(k);
+            size += buckets[&k].len();
+            for dz in -1i32..=1 {
+                for dy in -1i32..=1 {
+                    for dx in -1i32..=1 {
+                        let n = (k.0 + dx, k.1 + dy, k.2 + dz);
+                        if buckets.contains_key(&n) && visited.insert(n) {
+                            queue.push_back(n);
+                        }
+                    }
+                }
+            }
+        }
+        if size > best_size {
+            best_size = size;
+            best = component;
+        }
+    }
+    if best.is_empty() || best_size == cloud.points.len() {
+        return 0;
+    }
+    let keep: std::collections::HashSet<(i32, i32, i32)> = best.into_iter().collect();
+    let mut points = Vec::with_capacity(best_size);
+    let mut colors = Vec::with_capacity(best_size);
+    for (i, p) in cloud.points.iter().enumerate() {
+        if keep.contains(&key(p)) {
+            points.push(*p);
+            colors.push(cloud.colors[i]);
+        }
+    }
+    let removed = cloud.points.len() - points.len();
+    cloud.points = points;
+    cloud.colors = colors;
+    removed
+}
+
 /// Remove the dominant plane (e.g. a tabletop) from a dense cloud.
 ///
 /// Fits a plane with deterministic RANSAC and drops every point within
@@ -843,6 +1164,33 @@ mod tests {
         ];
         let n = select_neighbors(&views, 0, 2);
         assert_eq!(n, vec![1, 3]);
+    }
+
+    #[test]
+    fn auto_crop_keeps_the_largest_cluster() {
+        let mut points = Vec::new();
+        // Cluster A: a 3x3x3 block near the origin (27 points).
+        for x in 0..3 {
+            for y in 0..3 {
+                for z in 0..3 {
+                    points.push([x as f64 * 0.1, y as f64 * 0.1, z as f64 * 0.1]);
+                }
+            }
+        }
+        // Cluster B: 8 points far away.
+        for x in 0..2 {
+            for y in 0..2 {
+                for z in 0..2 {
+                    points.push([5.0 + x as f64 * 0.1, y as f64 * 0.1, z as f64 * 0.1]);
+                }
+            }
+        }
+        let colors = vec![[1, 2, 3]; points.len()];
+        let mut cloud = DenseCloud { points, colors };
+        let removed = auto_crop_largest(&mut cloud, 0.2);
+        assert_eq!(removed, 8, "the small far cluster must be dropped");
+        assert_eq!(cloud.points.len(), 27);
+        assert!(cloud.points.iter().all(|p| p[0] < 1.0));
     }
 
     #[test]
