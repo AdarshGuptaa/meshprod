@@ -534,10 +534,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.auto_config {
         let score = texture_score(&gray_frames);
         let (low, medium) = (score < 0.012, score < 0.035);
-        let auto_method = if low {
+        // Census WTA is ambiguous on perfectly flat regions (identical codes
+        // give cost zero), which reconstructs the tabletop as if it were the
+        // object. SGM resolves that by propagation, so it is the default for
+        // anything below high texture. Measured on the keyboard clip: censu
+        // WTA -> 30 patches, SGM -> 2 patches.
+        let auto_method = if low || medium {
             dense::CostMethod::Sgm
-        } else if medium {
-            dense::CostMethod::Census
         } else {
             dense::CostMethod::Ncc
         };
@@ -901,6 +904,37 @@ mod tests {
         assert!(validate_positive_args(0, 5).is_err(), "frame-step 0");
         assert!(validate_positive_args(1, 0).is_err(), "match-window 0");
         assert!(validate_positive_args(0, 0).is_err());
+    }
+
+    #[test]
+    fn texture_score_separates_flat_from_textured() {
+        use kornia_image::ImageSize;
+        let flat = vec![Image::<u8, 1>::from_size_val(
+            ImageSize {
+                width: 32,
+                height: 32,
+            },
+            100,
+        )
+        .unwrap()];
+        let mut checker = Image::<u8, 1>::from_size_val(
+            ImageSize {
+                width: 32,
+                height: 32,
+            },
+            0,
+        )
+        .unwrap();
+        {
+            let s = checker.as_slice_mut();
+            for y in 0..32 {
+                for x in 0..32 {
+                    s[y * 32 + x] = if (x / 4 + y / 4) % 2 == 0 { 0 } else { 255 };
+                }
+            }
+        }
+        assert!(texture_score(&flat) < 0.001, "flat image has no texture");
+        assert!(texture_score(&[checker]) > 0.2, "checkerboard is textured");
     }
 
     #[test]

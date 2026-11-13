@@ -3,8 +3,11 @@
 //!
 //! NCC needs intensity *variance* to match anything; smooth, low-texture
 //! surfaces defeat it. Census compares intensity *orderings*, which survive on
-//! gentle shading, and SGM adds a smoothness prior that propagates reliable
-//! disparities into low-texture regions.
+//! gentle shading. One trap: on a perfectly flat patch every comparison is a
+//! tie, so the census code is constant and the Hamming cost is **zero
+//! everywhere** — winner-takes-all then picks an arbitrary depth. SGM's
+//! smoothness prior resolves that by propagating evidence from nearby texture,
+//! which is why plain census WTA reconstructs flat tabletops as objects.
 
 use kornia_image::Image;
 

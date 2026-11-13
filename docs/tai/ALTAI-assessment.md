@@ -89,7 +89,7 @@ better backend, and the script is kept for that case.
 | Cost | Depth median / p90 | Raw faces | Patches after cleanup |
 |---|---|---|---|
 | NCC (previous) | 16.8 % / 92 % | 115,881 | 68 |
-| Census WTA (auto-selected, texture 0.021) | 20.5 % / 94 % | 231,520 | 61 |
+| Census WTA (texture 0.021) | 20.5 % / 94 % | 231,520 | 61 |
 | Census + SGM (4 paths) | **19.0 % / 77 %** | 334,898 | **43** |
 
 SGM measurably reduces the depth tail (p90 94 % → 77 %) and fragmentation
@@ -101,7 +101,30 @@ hand-tuned configuration.
 **Auto-config** is rule-based, not learned: mean image gradient → cost, window,
 NCC threshold and plane count; dense-point count → face budget and minimum
 patch size. Every choice is logged with the statistic that drove it, which is
-the transparent counterpart to a black-box tuner.
+the transparent counterpart to a black-box tuner. Rule: texture < 0.035 →
+**SGM** (census-WTA is ambiguous on flat regions: identical codes give cost
+zero), otherwise NCC.
+
+### 2.1d Keyboard capture (textured box)
+
+`keyboard.mp4` (480×854, 30 fps, 38 s) has only ~6 s of real parallax; the
+rest is a pan. Segment 15–25 s: **63/101 views register**, sparse RMSE 2.03 px,
+dense depth median 6.8 %.
+
+| Cost / cleanup | Raw faces | Patches |
+|---|---|---|
+| Census WTA (old auto rule) | 73,549 | 30 |
+| Census + SGM + plane removal | 20,148 | **2** |
+| + Taubin + QEM | 18,686 | 2 (Euler −36) |
+
+The plane removal deleted 5.4 M tabletop points so the volume focused on the
+keyboard. The surviving mesh is the keyboard's visible top surface (key rows
+readable in the render) but open at the sides: the usable segment covers only
+part of the orbit, and a flat keycap deck has little depth variation.
+
+**Capture lesson:** most of this clip has translation-free panning. SfM needs
+parallax; the `registered source frames` log is the fastest way to find the
+usable seconds.
 
 **Negative result — auto-crop:** on the noisy knife cloud the largest
 26-connected voxel cluster is a sub-region, so cropping shrank the scene and

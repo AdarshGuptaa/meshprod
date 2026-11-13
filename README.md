@@ -179,5 +179,17 @@ kornia-3d = { git = "https://github.com/AdarshGuptaa/kornia-rs.git", branch = "s
 - **`--auto-crop` needs a clean cloud.** On the noisy knife cloud the largest
   voxel cluster is a sub-region, shrinking the scene; use it after
   `--remove-plane` on well-behaved captures.
+- **Census is ambiguous on flat regions** (identical codes → cost zero). Plain
+  census WTA reconstructs a flat tabletop as if it were the object; SGM fixes
+  it. Auto-config therefore routes low/medium texture to SGM: measured on
+  `keyboard.mp4`, census WTA → 30 patches, SGM → **2 patches**.
+
+### Tested captures
+
+| Clip | Usable views | Sparse RMSE | Best mesh |
+|---|---|---|---|
+| `swiss_knife.mp4` (specular) | 22/63 | 2.09 px | 34 patches, Euler −104 |
+| `lip_balm.mp4` 18–27 s (white) | 66/68 | 2.05 px | SGM: 43 patches |
+| `keyboard.mp4` 15–25 s (textured) | 63/101 | 2.03 px | SGM + plane removal: **2 patches** |
 - On the supplied specular knife clip the mesh remains fragmented: the ceiling
   is the capture, not the solver (see the TAI report's Path-1/Path-2 results).
