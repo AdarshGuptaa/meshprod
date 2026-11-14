@@ -9,17 +9,17 @@ publish = false
 argh = "0.1"
 cudarc = "0.19"
 kiddo = "5.3"
-kornia-3d = { path = "../kornia-rs-semproj/crates/kornia-3d" }
-kornia-algebra = { path = "../kornia-rs-semproj/crates/kornia-algebra" }
-kornia-calib = { path = "../kornia-rs-semproj/crates/kornia-calib" }
-kornia-image = { path = "../kornia-rs-semproj/crates/kornia-image", features = ["cuda"] }
-kornia-imgproc = { path = "../kornia-rs-semproj/crates/kornia-imgproc", features = ["cuda"] }
-kornia-io = { path = "../kornia-rs-semproj/crates/kornia-io", features = ["gstreamer"] }
+kornia-3d = { git = "https://github.com/AdarshGuptaa/kornia-rs.git", branch = "semproj/sfm2mesh" }
+kornia-algebra = { git = "https://github.com/AdarshGuptaa/kornia-rs.git", branch = "semproj/sfm2mesh" }
+kornia-calib = { git = "https://github.com/AdarshGuptaa/kornia-rs.git", branch = "semproj/sfm2mesh" }
+kornia-image = { git = "https://github.com/AdarshGuptaa/kornia-rs.git", branch = "semproj/sfm2mesh", features = ["cuda"] }
+kornia-imgproc = { git = "https://github.com/AdarshGuptaa/kornia-rs.git", branch = "semproj/sfm2mesh", features = ["cuda"] }
+kornia-io = { git = "https://github.com/AdarshGuptaa/kornia-rs.git", branch = "semproj/sfm2mesh", features = ["gstreamer"] }
 rayon = "1.12"
 
 [dev-dependencies]
 tempfile = "3.27"
 
-# NOTE: path dependencies point at the local kornia-rs checkout (branch
-# `semproj/sfm2mesh`). For a reproducible hand-in, replace each with:
-#   kornia-3d = { git = "https://github.com/AdarshGuptaa/kornia-rs.git", branch = "semproj/sfm2mesh" }
+# Pinned to the fork branch that carries the SFM work (PR #1136). For local
+# iteration, add an uncommitted [patch] block pointing at a checkout; see the
+# README's "Dependency note".

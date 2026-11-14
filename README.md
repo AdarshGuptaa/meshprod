@@ -155,41 +155,132 @@ scripts/              reproducibility check for the TAI experiments
 
 ## Dependency note
 
-Dependencies are **paths** into `../kornia-rs-semproj` (a detached worktree of
-`semproj/sfm2mesh`) for fast local iteration. For a reproducible hand-in,
-switch them to the git branch:
+Dependencies point at the **`semproj/sfm2mesh` branch** of
+`https://github.com/AdarshGuptaa/kornia-rs` — a fork that also carries the SFM
+work from PR #1136. The branch is pinned on purpose: this project is built
+against a known kornia API.
+
+For fast local iteration against a checkout, add an uncommitted `[patch]`
+(builds break if a committed patch path does not exist):
 
 ```toml
-kornia-3d = { git = "https://github.com/AdarshGuptaa/kornia-rs.git", branch = "semproj/sfm2mesh" }
+[patch."https://github.com/AdarshGuptaa/kornia-rs.git"]
+kornia-3d      = { path = "../kornia-rs-semproj/crates/kornia-3d" }
+kornia-algebra = { path = "../kornia-rs-semproj/crates/kornia-algebra" }
+kornia-calib   = { path = "../kornia-rs-semproj/crates/kornia-calib" }
+kornia-image   = { path = "../kornia-rs-semproj/crates/kornia-image" }
+kornia-imgproc = { path = "../kornia-rs-semproj/crates/kornia-imgproc" }
+kornia-io      = { path = "../kornia-rs-semproj/crates/kornia-io" }
 ```
 
-## Known limitations
+## License
 
-- Up to scale: no metric anchor (AprilTag) yet.
-- Specular, textureless and thin objects reconstruct poorly.
-- The mesh can be open (partial view coverage); `closed=` is logged honestly.
-- The dense stage ignores lens distortion (a warning is printed if the solve
-  fitted a large one).
-- Background inside the reconstruction volume is meshed too (no segmentation).
-- **Textureless objects are hard even with Census/SGM.** `lip_balm.mp4`
-  (66/68 views registered, 2.05 px RMSE) goes from 16.8 % to 19–20 % dense
-  depth error; SGM improves the fragmentation from 61 to 43 patches, but the
-  white tube still lacks the signal. Sparse works; dense needs texture or a
-  stronger prior (depth network / projected pattern).
-- **`--auto-crop` needs a clean cloud.** On the noisy knife cloud the largest
-  voxel cluster is a sub-region, shrinking the scene; use it after
-  `--remove-plane` on well-behaved captures.
-- **Census is ambiguous on flat regions** (identical codes → cost zero). Plain
-  census WTA reconstructs a flat tabletop as if it were the object; SGM fixes
-  it. Auto-config therefore routes low/medium texture to SGM: measured on
-  `keyboard.mp4`, census WTA → 30 patches, SGM → **2 patches**.
+MIT — see `LICENSE`.
 
-### Tested captures
+## Limitations & known issues (audited)
 
-| Clip | Usable views | Sparse RMSE | Best mesh |
-|---|---|---|---|
-| `swiss_knife.mp4` (specular) | 22/63 | 2.09 px | 34 patches, Euler −104 |
-| `lip_balm.mp4` 18–27 s (white) | 66/68 | 2.05 px | SGM: 43 patches |
-| `keyboard.mp4` 15–25 s (textured) | 63/101 | 2.03 px | SGM + plane removal: **2 patches** |
-- On the supplied specular knife clip the mesh remains fragmented: the ceiling
-  is the capture, not the solver (see the TAI report's Path-1/Path-2 results).
+Every item below was observed in a measured run; numbers are from
+`docs/tai/ALTAI-assessment.md`.
+
+### Capture-side (data-bound, the usual cause of a bad mesh)
+
+1. **Non-rigid scene.** SfM assumes a static rigid world. On `lip_balm.mp4`
+   only 3/82 views registered while the object was being handled; the static
+   segment registered 66/68. Never move or rotate the object by hand.
+2. **Panning without parallax.** Translation-free camera movement cannot
+   triangulate. `keyboard.mp4` registered 16/228 views for the whole clip (all
+   in the last ~3 s); the 15–25 s orbit segment registered 63/101. Use the
+   `registered source frames` log to find the usable seconds.
+3. **Specular surfaces.** Polished metal breaks photo-consistency: the knife
+   (22/63 views) never produced a closed mesh (18–42 open patches) and Poisson
+   could not repair it. Fix physically: matte spray, diffuse light.
+4. **Textureless surfaces.** NCC/Census need intensity variation. The white
+   tube and plain red table gave 16.8 % (NCC), 20.5 % (Census) and 19.0 %
+   (SGM) median depth error, with 68/61/43 patches. SGM helps the tail and
+   fragmentation but cannot invent signal.
+5. **Background dominance.** The support surface is reconstructed as well as
+   the object. `--remove-plane` deleted 2.1–5.4 M tabletop points on the knife
+   and keyboard, focusing the volume.
+6. **Partial orbit coverage.** All three clips cover only part of the object,
+   so every mesh is open (Euler −36 … −731) and often a one-sided shell
+   (keyboard: top deck only). A closed model needs a full 360° orbit plus a
+   second elevation.
+7. **Small object / low resolution.** 480×854 portrait frames with the object
+   filling <1/3 of the frame reduce keypoint and depth quality; 120 fps fast
+   motion adds blur.
+
+### Algorithm-side
+
+8. **Up to scale.** No AprilTag anchor is wired, so shape is correct but
+   units are arbitrary (`ScaleSource::UpToScale`).
+9. **Fronto-parallel sweep bias.** One sweep direction smooths slanted
+   surfaces (Gallup et al. 2007 addresses this with multiple directions).
+10. **Discrete WTA, no sub-pixel refinement.** Depth is quantised to the
+    plane count; SGM is limited to four cardinal paths.
+11. **Census is ambiguous on flat regions.** Every comparison ties, the code
+    is constant and the cost is zero everywhere, so plain census WTA treats a
+    flat tabletop as a perfect match. Auto-config routes low/medium texture to
+    SGM, which resolves it by propagation (measured: keyboard 30 → 2 patches).
+12. **TSDF holes and honest failure.** Meshing only uses cells whose eight
+    corners are observed, which leaves holes at coverage boundaries.
+    Volumetric diffusion can fill them but invents surface where no camera
+    looked (blobs/sheets), so it ships disabled.
+13. **Distortion is ignored by the dense stage.** The sweep is a pure pinhole
+    homography; a large fitted distortion prints a warning, not a correction.
+14. **No loop closure or global SfM.** `kornia-calib` is incremental; a
+    sequence cannot be split and merged, and long captures can drift. Fixing
+    this needs kornia-calib changes (parked).
+15. **No object segmentation.** `--auto-crop` clusters voxels by 26-connectivity;
+    on a noisy cloud the largest cluster can be a sub-region (measured: the
+    knife shrank to 6 tiny islands). It is opt-in and needs a clean cloud.
+16. **External Poisson is not a fix for bad input.** Screened Poisson on the
+    knife cloud produced lumpy blobs (mean NN distance 60 units, not
+    watertight). It is kept for clean captures.
+17. **Auto-config is heuristic.** Thresholds (0.012 / 0.035 texture, window,
+    plane count) were tuned on exactly three clips; it is a starting point,
+    not a guarantee. CPU only; SGM runs views sequentially to bound memory.
+
+### Process / trustworthiness
+
+18. **No metric ground truth.** Object dimensions were never compared against
+    a ruler or GT mesh (AprilTag anchoring skipped by decision).
+19. **Fairness sample is tiny.** Three objects (specular, textureless, textured
+    box); no matte/curved/dark/thin coverage yet.
+20. **Determinism scope.** Byte-identical reruns verified for the default and
+    auto-config paths; not every flag combination.
+21. **Pinned dependency.** Builds against the `semproj/sfm2mesh` branch of the
+    fork (see *Dependency note*), not upstream `main`.
+
+### Troubleshooting
+
+| Symptom | Likely cause | Action |
+|---|---|---|
+| "need at least two frames" / hangs | old kornia-io EOS behaviour (pinned branch) | use a decodable clip; the pinned code has a 30 s startup timeout |
+| <20 % of views registered | panning, moving object, blur | trim to the segment listed by `registered source frames`; smaller `--frame-step` |
+| Depth map mostly empty | textureless surface | `--auto-config`, then `--cost sgm`; add physical texture |
+| Table/floor in the mesh | background in the volume | `--remove-plane`; frame the object larger |
+| Fragmented / spiky mesh | depth noise, specular | SGM, `--volume-smoothing 3`, `--min-component-faces 500`, Taubin |
+| Scene suddenly tiny after cropping | `--auto-crop` picked a sub-cluster | drop `--auto-crop` |
+| Blobby Poisson output | incomplete or inconsistent input | do not use Poisson; improve the capture |
+| Warning about fitted distortion | wide-angle lens | keep distortion small or undistort before capture |
+
+## Roadmap — biggest levers for better meshes
+
+Ordered by expected gain per unit of effort:
+
+1. **Capture protocol** (free, biggest effect): static object, textured/matte
+   surface, full 360° + second elevation, diffuse light, locked exposure,
+   30 fps, no zoom.
+2. **Default `--lr-required 2` for low/medium texture** + sub-pixel WTA
+   (parabolic fit) + 8-path SGM: measured accuracy gain on noisy depth.
+3. **AprilTag focal + metric scale** using existing kornia APIs
+   (`estimate_focal`, `TagObservation`) — enables ruler-checked accuracy.
+4. **Object segmentation** (mask video or an ONNX matting/SAM model) to
+   replace `--auto-crop`.
+5. **Mesh-level completion**: screened Poisson for clean clouds, or
+   feature-preserving bilateral smoothing + hole fill for noisy ones.
+6. **Loop closure / global SfM** in `kornia-calib` (upstream contribution)
+   so long captures stop drifting and segments can be merged.
+7. **Learned features** (SuperPoint/LightGlue) and a DUSt3R/MASt3R baseline
+   for the TAI comparison table.
+8. **Benchmark** on DTU/ETH3D for metric GT accuracy and repeatability.

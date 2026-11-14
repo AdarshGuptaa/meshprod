@@ -1109,6 +1109,7 @@ dependencies = [
 [[package]]
 name = "kornia-3d"
 version = "0.2.0"
+source = "git+https://github.com/AdarshGuptaa/kornia-rs.git?branch=semproj%2Fsfm2mesh#9c4a064cd431c9425a994ad98d68f33eb3d76482"
 dependencies = [
  "bincode",
  "faer",
@@ -1127,6 +1128,7 @@ dependencies = [
 [[package]]
 name = "kornia-algebra"
 version = "0.2.0"
+source = "git+https://github.com/AdarshGuptaa/kornia-rs.git?branch=semproj%2Fsfm2mesh#9c4a064cd431c9425a994ad98d68f33eb3d76482"
 dependencies = [
  "glam 0.33.12",
  "nalgebra",
@@ -1137,6 +1139,7 @@ dependencies = [
 [[package]]
 name = "kornia-calib"
 version = "0.2.0"
+source = "git+https://github.com/AdarshGuptaa/kornia-rs.git?branch=semproj%2Fsfm2mesh#9c4a064cd431c9425a994ad98d68f33eb3d76482"
 dependencies = [
  "kornia-3d",
  "kornia-algebra",
@@ -1147,6 +1150,7 @@ dependencies = [
 [[package]]
 name = "kornia-image"
 version = "0.2.0"
+source = "git+https://github.com/AdarshGuptaa/kornia-rs.git?branch=semproj%2Fsfm2mesh#9c4a064cd431c9425a994ad98d68f33eb3d76482"
 dependencies = [
  "cudarc",
  "kornia-tensor",
@@ -1158,6 +1162,7 @@ dependencies = [
 [[package]]
 name = "kornia-imgproc"
 version = "0.2.0"
+source = "git+https://github.com/AdarshGuptaa/kornia-rs.git?branch=semproj%2Fsfm2mesh#9c4a064cd431c9425a994ad98d68f33eb3d76482"
 dependencies = [
  "cudarc",
  "half",
@@ -1174,6 +1179,7 @@ dependencies = [
 [[package]]
 name = "kornia-io"
 version = "0.2.0"
+source = "git+https://github.com/AdarshGuptaa/kornia-rs.git?branch=semproj%2Fsfm2mesh#9c4a064cd431c9425a994ad98d68f33eb3d76482"
 dependencies = [
  "circular-buffer",
  "gstreamer",
@@ -1194,6 +1200,7 @@ dependencies = [
 [[package]]
 name = "kornia-oxide-kernels"
 version = "0.2.0"
+source = "git+https://github.com/AdarshGuptaa/kornia-rs.git?branch=semproj%2Fsfm2mesh#9c4a064cd431c9425a994ad98d68f33eb3d76482"
 dependencies = [
  "cudarc",
  "kornia-tensor",
@@ -1203,6 +1210,7 @@ dependencies = [
 [[package]]
 name = "kornia-tensor"
 version = "0.2.0"
+source = "git+https://github.com/AdarshGuptaa/kornia-rs.git?branch=semproj%2Fsfm2mesh#9c4a064cd431c9425a994ad98d68f33eb3d76482"
 dependencies = [
  "cudarc",
  "num-traits",
