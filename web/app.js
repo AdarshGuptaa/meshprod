@@ -2,60 +2,89 @@ import * as THREE from "three";
 import { PLYLoader } from "./vendor/PLYLoader.js";
 import { OrbitControls } from "./vendor/OrbitControls.js";
 
-const STAGES = [
-  "decode", "features", "match", "verify", "tracks", "sparse", "dense", "fusion", "mesh",
-];
+if (new URLSearchParams(location.search).has("static")) {
+  document.body.classList.add("static");
+}
+
+const STAGES = ["decode", "features", "match", "verify", "tracks", "sparse", "dense", "fusion", "mesh"];
 
 const SCHEMA = [
   {
     title: "Matching",
     open: false,
     items: [
-      { key: "detector", label: "Detector", type: "select", options: ["sift", "orb"] },
-      { key: "frame_step", label: "Frame step", type: "range", min: 1, max: 30, step: 1 },
-      { key: "n_features", label: "Max features", type: "range", min: 100, max: 2000, step: 100 },
-      { key: "match_window", label: "Match window", type: "range", min: 1, max: 12, step: 1 },
-      { key: "ratio", label: "Lowe ratio", type: "range", min: 0.6, max: 0.95, step: 0.01 },
-      { key: "geo_verify", label: "Epipolar verification", type: "toggle" },
-      { key: "sprt", label: "SPRT registration", type: "toggle" },
-      { key: "refine_intrinsics", label: "Refine intrinsics", type: "toggle" },
-      { key: "auto_config", label: "Auto-config from texture", type: "toggle" },
+      { key: "detector", label: "Detector", type: "select", options: ["sift", "orb"],
+        help: "SIFT is scale- and rotation-invariant and the safer choice for phone orbits. ORB uses binary descriptors: much faster, weaker across large viewpoint changes." },
+      { key: "frame_step", label: "Frame step", type: "range", min: 1, max: 30, step: 1,
+        help: "Keep every Nth frame. Higher = larger baselines and faster, but fewer overlapping matches. 10 suits 30–120 fps clips." },
+      { key: "n_features", label: "Max features", type: "range", min: 100, max: 2000, step: 100,
+        help: "Keypoints per frame. More gives denser tracks and better registration; matching cost grows linearly." },
+      { key: "match_window", label: "Match window", type: "range", min: 1, max: 12, step: 1,
+        help: "How many following frames each frame is matched against. Larger bridges fast motion but admits more outliers." },
+      { key: "ratio", label: "Lowe ratio", type: "range", min: 0.6, max: 0.95, step: 0.01,
+        help: "Ratio test between best and second-best descriptor. Lower is stricter: fewer false matches, fewer matches overall. 0.8 is standard." },
+      { key: "geo_verify", label: "Epipolar verification", type: "toggle",
+        help: "RANSAC fundamental-matrix check per frame pair. Removes descriptor false positives at a small time cost." },
+      { key: "sprt", label: "SPRT registration", type: "toggle",
+        help: "Wald sequential test during PnP: rejects hopeless poses early. Same decision, less time." },
+      { key: "refine_intrinsics", label: "Refine intrinsics", type: "toggle",
+        help: "Fits a global focal scale plus radial/tangential distortion against the solve. Useful when intrinsics were guessed." },
+      { key: "auto_config", label: "Auto-config from texture", type: "toggle",
+        help: "Measures frame texture and picks cost, window, NCC threshold and plane count. Overrides those fields; every choice is logged." },
     ],
   },
   {
     title: "Dense depth",
     open: true,
     items: [
-      { key: "cost", label: "Cost", type: "select", options: ["ncc", "census", "sgm"] },
-      { key: "dense_scale", label: "Dense scale", type: "range", min: 0.25, max: 1, step: 0.05 },
-      { key: "dense_planes", label: "Planes", type: "range", min: 32, max: 160, step: 8 },
-      { key: "dense_window", label: "Window", type: "range", min: 3, max: 7, step: 2 },
-      { key: "dense_neighbors", label: "Neighbours", type: "range", min: 1, max: 5, step: 1 },
-      { key: "ncc_min", label: "Min NCC", type: "range", min: 0.2, max: 0.7, step: 0.05 },
-      { key: "lr_required", label: "Agreements", type: "range", min: 1, max: 3, step: 1 },
-      { key: "sgm_paths", label: "SGM paths", type: "range", min: 1, max: 8, step: 1 },
+      { key: "cost", label: "Cost", type: "select", options: ["ncc", "census", "sgm"],
+        help: "ncc = normalized cross-correlation. census = intensity-ordering comparison (better on gentle shading). sgm = census plus a smoothness prior that fills low-texture regions." },
+      { key: "dense_scale", label: "Dense scale", type: "range", min: 0.25, max: 1, step: 0.05,
+        help: "Depth-map resolution relative to the source. 0.5 = half resolution and roughly 4× faster." },
+      { key: "dense_planes", label: "Planes", type: "range", min: 32, max: 160, step: 8,
+        help: "Inverse-depth planes swept per pixel. More = finer depth resolution, linearly slower." },
+      { key: "dense_window", label: "Window", type: "range", min: 3, max: 7, step: 2,
+        help: "Photometric window side. Larger is more robust to noise but blurs depth edges." },
+      { key: "dense_neighbors", label: "Neighbours", type: "range", min: 1, max: 5, step: 1,
+        help: "Neighbouring views each view compares against. More = more robust, slower." },
+      { key: "ncc_min", label: "Min NCC", type: "range", min: 0.2, max: 0.7, step: 0.05,
+        help: "Minimum similarity for a depth pixel. Lower keeps more pixels (more coverage, more noise)." },
+      { key: "lr_required", label: "Agreements", type: "range", min: 1, max: 3, step: 1,
+        help: "Neighbours that must independently agree. 2 is stricter and more accurate but halves coverage on noisy captures." },
+      { key: "sgm_paths", label: "SGM paths", type: "range", min: 1, max: 8, step: 1,
+        help: "Aggregation directions for SGM. Four cardinals are the default; eight adds diagonals (better smoothing, slower)." },
     ],
   },
   {
     title: "Fusion",
     open: false,
     items: [
-      { key: "voxel_resolution", label: "Voxel resolution", type: "range", min: 64, max: 384, step: 16 },
-      { key: "trunc_voxels", label: "Truncation", type: "range", min: 1, max: 8, step: 0.5 },
-      { key: "volume_smoothing", label: "Field smoothing", type: "range", min: 0, max: 4, step: 1 },
-      { key: "hole_fill_iterations", label: "Hole fill", type: "range", min: 0, max: 8, step: 1 },
-      { key: "remove_plane", label: "Remove dominant plane", type: "toggle" },
+      { key: "voxel_resolution", label: "Voxel resolution", type: "range", min: 64, max: 384, step: 16,
+        help: "Grid points along the longest scene axis. Higher = finer mesh, more memory and time." },
+      { key: "trunc_voxels", label: "Truncation", type: "range", min: 1, max: 8, step: 0.5,
+        help: "Truncation band in voxels. It must exceed the depth noise; too small and views disagree, tearing the surface." },
+      { key: "volume_smoothing", label: "Field smoothing", type: "range", min: 0, max: 4, step: 1,
+        help: "Box-filter passes on the signed distance field. Removes voxel-scale pyramids before meshing." },
+      { key: "hole_fill_iterations", label: "Hole fill", type: "range", min: 0, max: 8, step: 1,
+        help: "Diffusion passes into unobserved voxels. Off by default: diffusion invents surface where no camera looked." },
+      { key: "remove_plane", label: "Remove dominant plane", type: "toggle",
+        help: "RANSAC-removes the dominant plane (table, floor) from the dense cloud before fusion." },
     ],
   },
   {
     title: "Mesh",
     open: false,
     items: [
-      { key: "smooth_iterations", label: "Taubin smoothing", type: "range", min: 0, max: 16, step: 1 },
-      { key: "bilateral_iterations", label: "Bilateral smoothing", type: "range", min: 0, max: 4, step: 1 },
-      { key: "needle_aspect", label: "Needle filter", type: "range", min: 0, max: 30, step: 1 },
-      { key: "target_faces", label: "Target faces", type: "range", min: 5000, max: 150000, step: 5000 },
-      { key: "min_component_faces", label: "Min patch", type: "range", min: 0, max: 2000, step: 50 },
+      { key: "smooth_iterations", label: "Taubin smoothing", type: "range", min: 0, max: 16, step: 1,
+        help: "Alternating Laplacian passes (λ/μ) that smooth without shrinking. Eight is a good default." },
+      { key: "bilateral_iterations", label: "Bilateral smoothing", type: "range", min: 0, max: 4, step: 1,
+        help: "Feature-preserving passes: flattens noise but keeps edges such as keycaps and blade bevels." },
+      { key: "needle_aspect", label: "Needle filter", type: "range", min: 0, max: 30, step: 1,
+        help: "Drop triangles above this longest/shortest edge ratio. Zero disables it; a strict value opens many edges on noisy clouds." },
+      { key: "target_faces", label: "Target faces", type: "range", min: 5000, max: 150000, step: 5000,
+        help: "Quadric edge-collapse budget. Lower gives a simpler, lighter mesh." },
+      { key: "min_component_faces", label: "Min patch", type: "range", min: 0, max: 2000, step: 50,
+        help: "Drop connected surface patches smaller than this. Higher cleans floaters but may remove real surface." },
     ],
   },
 ];
@@ -68,29 +97,55 @@ const PRESETS = {
 };
 
 const ALTAI = [
-  ["Human agency & oversight", "Every parameter is exposed; a human decides when a mesh is usable. The pipeline never auto-accepts a result.", "good"],
-  ["Technical robustness", "Deterministic reruns, depth-vs-sparse checks and honest closedness reporting. Specular and textureless captures degrade visibly, not silently.", "good"],
-  ["Privacy & data governance", "Everything runs on 127.0.0.1. No upload to any server, no telemetry, no network access after the build.", "good"],
-  ["Transparency", "All logs and derived parameters are visible and exportable; assumptions (pinhole, up-to-scale, Lambertian) are documented.", "good"],
-  ["Fairness & diversity", "Only three captures evaluated so far — specular, textureless and textured. More object categories are needed.", "warn"],
-  ["Societal & environmental", "CPU-only path, ~1 minute per scan; modest energy footprint. Scanning objects can raise IP/consent questions.", "good"],
-  ["Accountability", "Reproducible commands, measured claims, pinned dependency, MIT license and AI disclosure in the credits.", "good"],
+  ["Human agency", "Every parameter is exposed and logged; a person decides when a mesh is usable. The pipeline never auto-accepts a result.", "good"],
+  ["Robustness", "Deterministic reruns, depth-vs-sparse checks, mesh-quality pack and named failures. Degradation is visible, not silent.", "good"],
+  ["Privacy", "Bound to 127.0.0.1. No uploads, no telemetry; runs stay in web_runs/ on this machine.", "good"],
+  ["Transparency", "Live logs, derived parameters, failure codes with hints, and exportable run configs.", "good"],
+  ["Fairness", "Only three captures evaluated (specular, textureless, textured). More object categories are needed.", "warn"],
+  ["Environment", "CPU-only path, ~1 minute per scan; resource use is recorded in every run report.", "good"],
+  ["Accountability", "Provenance hashes, measured claims, pinned dependency, MIT license and AI disclosure.", "good"],
 ];
 
-let config = null;
+// Mirror of the server defaults so the first paint does not wait on the feed.
+const DEFAULT_CONFIG = {
+  fx: 895, fy: 895, cx: 640, cy: 360,
+  detector: "sift", frame_step: 10, n_features: 500, match_window: 5, ratio: 0.8,
+  geo_verify: true, geo_threshold: 3.0, geo_min_inliers: 15, wide_baseline: 0,
+  sprt: true, refine_intrinsics: false, auto_config: true, remove_plane: false,
+  dense_scale: 0.5, dense_planes: 96, dense_window: 5, dense_neighbors: 3,
+  ncc_min: 0.4, lr_required: 1, cost: "ncc", sgm_paths: 4,
+  voxel_resolution: 256, trunc_voxels: 3.0, volume_smoothing: 2,
+  hole_fill_iterations: 0, smooth_iterations: 8, bilateral_iterations: 2,
+  needle_aspect: 0.0, target_faces: 100000, min_component_faces: 200,
+};
+
+const SEED_HISTORY = [
+  { name: "swiss_knife", faces: 86971, depth_median: 4.0, patches: 33, views: 22 },
+  { name: "lip_balm", faces: 19581, depth_median: 14.8, patches: 41, views: 66 },
+  { name: "keyboard", faces: 4880, depth_median: 4.5, patches: 4, views: 63 },
+];
+
+let config = { ...DEFAULT_CONFIG };
 let stats = null;
 let lastMeshKey = null;
 let chartData = [];
+let videoFile = null;
 
 /* ---------- tabs ---------- */
-document.querySelectorAll(".tab").forEach((tab) => {
-  tab.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
-    document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
-    tab.classList.add("active");
-    document.getElementById(`tab-${tab.dataset.tab}`).classList.add("active");
-  });
+const tabs = [...document.querySelectorAll(".tab")];
+tabs.forEach((tab) => {
+  tab.addEventListener("click", () => activateTab(tab.dataset.tab));
 });
+let viewerActive = true;
+function activateTab(name) {
+  viewerActive = name === "studio";
+  tabs.forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+  document.querySelectorAll(".tab-panel").forEach((p) =>
+    p.classList.toggle("active", p.id === `tab-${name}`),
+  );
+  if (name === "slides") resizeSlides();
+  history.replaceState(null, "", `#${name}`);
+}
 
 /* ---------- config form ---------- */
 function renderGroups() {
@@ -103,16 +158,9 @@ function renderGroups() {
     const summary = document.createElement("summary");
     summary.textContent = group.title;
     details.appendChild(summary);
-    for (const item of group.items) {
-      details.appendChild(item.type === "toggle" ? toggleRow(item) : rangeRow(item));
-    }
+    for (const item of group.items) details.appendChild(item.type === "toggle" ? toggleRow(item) : rangeRow(item));
     host.appendChild(details);
   }
-}
-
-function clampToStep(value, item) {
-  if (item.step) return Math.round(value / item.step) * item.step;
-  return value;
 }
 
 function rangeRow(item) {
@@ -120,6 +168,7 @@ function rangeRow(item) {
   row.className = "row";
   const label = document.createElement("label");
   label.textContent = item.label;
+  label.title = item.help;
   const value = document.createElement("span");
   value.className = "value";
   const input = document.createElement("input");
@@ -128,6 +177,7 @@ function rangeRow(item) {
   input.max = item.max;
   input.step = item.step;
   input.value = config[item.key];
+  input.title = item.help;
   value.textContent = formatValue(config[item.key]);
   input.addEventListener("input", () => {
     config[item.key] = Number(input.value);
@@ -142,11 +192,13 @@ function toggleRow(item) {
   row.className = "row";
   const label = document.createElement("label");
   label.textContent = item.label;
+  label.title = item.help;
   const sw = document.createElement("label");
   sw.className = "switch";
   const input = document.createElement("input");
   input.type = "checkbox";
   input.checked = Boolean(config[item.key]);
+  input.title = item.help;
   input.addEventListener("change", () => (config[item.key] = input.checked));
   const knob = document.createElement("span");
   sw.append(input, knob);
@@ -159,18 +211,15 @@ function formatValue(v) {
   return Number.isInteger(v) ? String(v) : v.toFixed(2);
 }
 
-/* ---------- presets ---------- */
 document.querySelectorAll("[data-preset]").forEach((btn) => {
   btn.addEventListener("click", () => {
     document.querySelectorAll("[data-preset]").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
-    const preset = PRESETS[btn.dataset.preset] || {};
-    Object.assign(config, preset);
+    Object.assign(config, PRESETS[btn.dataset.preset] || {});
     renderGroups();
   });
 });
 
-/* ---------- intrinsics ---------- */
 function bindIntrinsics() {
   for (const key of ["fx", "fy", "cx", "cy"]) {
     const input = document.getElementById(key);
@@ -179,11 +228,33 @@ function bindIntrinsics() {
   }
 }
 
+/* ---------- guide ---------- */
+function renderGuide() {
+  const host = document.getElementById("guide");
+  host.innerHTML = "";
+  for (const group of SCHEMA) {
+    const block = document.createElement("div");
+    block.className = "guide-group";
+    const title = document.createElement("h3");
+    title.textContent = group.title;
+    block.appendChild(title);
+    for (const item of group.items) {
+      const wrap = document.createElement("div");
+      wrap.className = "guide-item";
+      const dt = document.createElement("dt");
+      dt.textContent = item.key;
+      const dd = document.createElement("dd");
+      dd.textContent = item.help;
+      wrap.append(dt, dd);
+      block.appendChild(wrap);
+    }
+    host.appendChild(block);
+  }
+}
+
 /* ---------- upload ---------- */
-let videoFile = null;
 const dropzone = document.getElementById("dropzone");
 const videoInput = document.getElementById("video-input");
-
 dropzone.addEventListener("click", () => videoInput.click());
 videoInput.addEventListener("change", () => setVideo(videoInput.files[0]));
 for (const evt of ["dragover", "dragenter"]) {
@@ -196,7 +267,6 @@ dropzone.addEventListener("drop", (e) => {
   const file = e.dataTransfer.files[0];
   if (file) setVideo(file);
 });
-
 function setVideo(file) {
   if (!file) return;
   videoFile = file;
@@ -209,7 +279,9 @@ const runButton = document.getElementById("run-button");
 runButton.addEventListener("click", async () => {
   if (!videoFile) {
     runButton.textContent = "Choose a video first";
-    setTimeout(() => (runButton.textContent = "Run reconstruction"), 1600);
+    setTimeout(() => {
+      runButton.innerHTML = '<svg class="icon"><use href="#i-play"/></svg>Run reconstruction';
+    }, 1600);
     return;
   }
   const fd = new FormData();
@@ -231,8 +303,7 @@ runButton.addEventListener("click", async () => {
 async function poll() {
   try {
     const res = await fetch("/api/status", { cache: "no-store" });
-    const data = await res.json();
-    applyStatus(data);
+    applyStatus(await res.json());
   } catch {
     /* server restarting */
   }
@@ -251,8 +322,12 @@ function applyStatus(data) {
   renderError(data.error);
   if (data.report) renderReport(data.report);
   runButton.disabled = data.status === "running";
-  runButton.textContent = data.status === "running" ? "Reconstructing…" : "Run reconstruction";
-
+  if (data.status === "running") {
+    runButton.innerHTML = '<svg class="icon"><use href="#i-play"/></svg>Reconstructing…';
+    document.getElementById("download-mesh").style.display = "none";
+  } else {
+    runButton.innerHTML = '<svg class="icon"><use href="#i-play"/></svg>Run reconstruction';
+  }
   if (data.status === "done" && stats.faces) {
     const key = `${stats.faces}-${stats.seconds}`;
     if (key !== lastMeshKey) {
@@ -261,10 +336,7 @@ function applyStatus(data) {
     }
     const link = document.getElementById("download-mesh");
     link.href = "/api/mesh/mesh";
-    link.style.display = "inline-block";
-  }
-  if (data.status === "running") {
-    document.getElementById("download-mesh").style.display = "none";
+    link.style.display = "inline-flex";
   }
 }
 
@@ -326,7 +398,6 @@ function renderCards(s) {
 function hideError() {
   document.getElementById("error-banner").hidden = true;
 }
-
 function renderError(err) {
   const banner = document.getElementById("error-banner");
   if (!err) {
@@ -346,7 +417,7 @@ function renderError(err) {
   }
 }
 
-/* ---------- run report (trust metrics) ---------- */
+/* ---------- run report ---------- */
 function renderReport(report) {
   const q = report.mesh_quality || {};
   const p = report.provenance || {};
@@ -374,10 +445,9 @@ function renderReport(report) {
   document.getElementById("report-json").textContent = JSON.stringify(report, null, 2);
 }
 
-/* ---------- failure catalogue ---------- */
+/* ---------- diagnostics ---------- */
 async function loadDiagnostics() {
-  const res = await fetch("/api/diagnostics", { cache: "no-store" });
-  const rows = await res.json();
+  const rows = await (await fetch("/api/diagnostics", { cache: "no-store" })).json();
   const host = document.getElementById("diagnostics");
   host.innerHTML = "";
   for (const row of rows) {
@@ -400,11 +470,18 @@ async function loadDiagnostics() {
 }
 
 /* ---------- charts ---------- */
+function drawHistory() {
+  drawChart(document.getElementById("chart-faces"), chartData.map((r) => r.faces), "#24405e");
+  drawChart(document.getElementById("chart-depth"), chartData.map((r) => r.depth_median), "#c19a3f");
+}
+
 async function loadHistory() {
-  const res = await fetch("/api/history", { cache: "no-store" });
-  chartData = await res.json();
-  drawChart(document.getElementById("chart-faces"), chartData.map((r) => r.faces), "#3c4a55");
-  drawChart(document.getElementById("chart-depth"), chartData.map((r) => r.depth_median), "#7d8a5c");
+  try {
+    chartData = await (await fetch("/api/history", { cache: "no-store" })).json();
+  } catch {
+    chartData = SEED_HISTORY;
+  }
+  drawHistory();
 }
 
 function drawChart(svg, values, color) {
@@ -420,16 +497,16 @@ function drawChart(svg, values, color) {
     rect.setAttribute("y", h - pad - bh);
     rect.setAttribute("width", barW * 0.7);
     rect.setAttribute("height", Math.max(bh, 1));
-    rect.setAttribute("rx", 4);
+    rect.setAttribute("rx", 2);
     rect.setAttribute("fill", color);
-    rect.setAttribute("opacity", 0.85);
+    rect.setAttribute("opacity", 0.88);
     svg.appendChild(rect);
     const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
     label.setAttribute("x", pad + i * barW + barW / 2);
     label.setAttribute("y", h - pad + 12);
     label.setAttribute("text-anchor", "middle");
     label.setAttribute("font-size", "8");
-    label.setAttribute("fill", "#5b646b");
+    label.setAttribute("fill", "#5a646c");
     label.textContent = (chartData[i]?.name || "").slice(0, 9);
     svg.appendChild(label);
     const value = document.createElementNS("http://www.w3.org/2000/svg", "text");
@@ -437,7 +514,7 @@ function drawChart(svg, values, color) {
     value.setAttribute("y", h - pad - bh - 4);
     value.setAttribute("text-anchor", "middle");
     value.setAttribute("font-size", "8");
-    value.setAttribute("fill", "#23282c");
+    value.setAttribute("fill", "#1b2126");
     value.textContent = v >= 10000 ? `${(v / 1000).toFixed(0)}k` : v.toFixed(v < 100 ? 1 : 0);
     svg.appendChild(value);
   });
@@ -446,7 +523,7 @@ function drawChart(svg, values, color) {
   axis.setAttribute("x2", w - pad);
   axis.setAttribute("y1", h - pad);
   axis.setAttribute("y2", h - pad);
-  axis.setAttribute("stroke", "#e5ddca");
+  axis.setAttribute("stroke", "#d7cdb6");
   svg.appendChild(axis);
 }
 
@@ -467,12 +544,279 @@ document.getElementById("export-config").addEventListener("click", () => {
   document.getElementById("config-json").textContent = JSON.stringify(config, null, 2);
 });
 
+/* ---------- slides ---------- */
+const GOLD = "#e2c88a";
+const STEEL = "#6d8aa6";
+const INK = "#efe7d4";
+
+function svg(body, viewBox = "0 0 360 280") {
+  return `<svg viewBox="${viewBox}" fill="none" xmlns="http://www.w3.org/2000/svg">${body}</svg>`;
+}
+
+const SLIDES = [
+  {
+    kicker: "01",
+    title: "meshprod",
+    body: `<p><strong>One monocular video in, one measured mesh out.</strong></p>
+      <p>Sparse structure-from-motion, dense multi-view stereo, signed-distance fusion, surface extraction and simplification — with a trust report attached to every run.</p>`,
+    chips: ["22–66 registered views", "20k–87k faces", "~1 min/scene", "deterministic"],
+    figure: svg(`
+      <g stroke="${GOLD}" stroke-width="1.6" opacity="0.95">
+        <path d="M180 60 270 108 180 156 90 108Z"/><path d="M90 108v70l90 48 90-48v-70"/>
+        <path d="M180 156v70"/>
+      </g>
+      <g fill="${STEEL}" opacity="0.9">
+        <circle cx="180" cy="60" r="3"/><circle cx="270" cy="108" r="3"/><circle cx="90" cy="108" r="3"/>
+        <circle cx="180" cy="226" r="3"/>
+      </g>`),
+  },
+  {
+    kicker: "02",
+    title: "The problem",
+    body: `<p>Structure-from-Motion gives camera poses and a few thousand points. A surface needs <strong>every pixel</strong> to vote on where space ends.</p>
+      <p>Three physical conditions decide whether that works: the scene is rigid, the surface has texture, the light is diffuse. All three are measurable failures.</p>`,
+    chips: ["3/82 views when the object moved", "panning registered 16/228", "specular blade: 33 patches"],
+    figure: svg(`
+      <g stroke="${STEEL}" stroke-width="1.2" opacity="0.8">
+        <circle cx="90" cy="70" r="18"/><circle cx="270" cy="70" r="18"/>
+      </g>
+      <path d="M108 82 200 150 252 86" stroke="${GOLD}" stroke-width="1.4" stroke-dasharray="5 5"/>
+      <g fill="${GOLD}">
+        <circle cx="200" cy="150" r="5"/>
+      </g>`),
+  },
+  {
+    kicker: "03",
+    title: "The pipeline",
+    body: `<p>Nine stages, each with its own log, timing and failure code. Sparse stages are cheap; dense depth dominates the runtime.</p>`,
+    chips: ["decode → features → match → verify → tracks", "sparse → dense → fusion → mesh"],
+    figure: svg(`
+      <path d="M30 140h300" stroke="${GOLD}" stroke-width="1.2" class="flow-line"/>
+      <g font-size="9" fill="${INK}" text-anchor="middle">
+        ${["decode","features","match","verify","tracks","sparse","dense","fusion","mesh"]
+          .map((n, i) => `<circle cx="${34 + i * 36.5}" cy="140" r="9" fill="#1b2c3d" stroke="${GOLD}" stroke-width="1.2"/>
+            <text x="${34 + i * 36.5}" y="168" fill="${STEEL}">${i + 1}</text>
+            <text x="${34 + i * 36.5}" y="122" fill="${INK}" font-size="7.5">${n}</text>`)
+          .join("")}
+      </g>`, "0 0 360 210"),
+  },
+  {
+    kicker: "04",
+    title: "Decode and features",
+    body: `<p>Frames are decoded with GStreamer and converted to gray. SIFT finds scale-space extrema with 128-float descriptors; ORB uses FAST corners and 256-bit binary descriptors.</p>
+      <p><strong>Choice:</strong> SIFT for phone orbits, ORB when speed matters more than large viewpoint changes.</p>`,
+    chips: ["23.7k keypoints / 63 frames", "500 features per frame", "SIFT"],
+    figure: svg(`
+      <g stroke="${STEEL}" stroke-width="1">${Array.from({length: 8}, (_, i) =>
+        `<line x1="${40 + i * 36}" y1="50" x2="${40 + i * 36}" y2="230"/>`).join("")}
+        ${Array.from({length: 5}, (_, i) =>
+        `<line x1="40" y1="${50 + i * 44}" x2="292" y2="${50 + i * 44}"/>`).join("")}
+      </g>
+      <g fill="none" stroke="${GOLD}" stroke-width="1.4">${[[94,94],[203,138],[167,182],[238,94]].map(
+        ([x,y]) => `<circle cx="${x}" cy="${y}" r="7"/><path d="M${x-10} ${y}h20M${x} ${y-10}v20"/>`).join("")}
+      </g>`),
+  },
+  {
+    kicker: "05",
+    title: "Matching",
+    body: `<p>Three filters, each catching what the last missed: Lowe's ratio rejects ambiguous descriptors, mutual nearest neighbours enforce one-to-one matches, and epipolar RANSAC throws away pairs that violate <strong>x₂ᵀFx₁ = 0</strong>.</p>`,
+    chips: ["21,667 raw matches", "17,170 after RANSAC", "3,780 tracks"],
+    figure: svg(`
+      <g stroke="${STEEL}" stroke-width="1.2"><path d="M60 90l40 26-40 26-40-26Z"/><path d="M300 90l40 26-40 26-40-26Z"/></g>
+      <g stroke="${GOLD}" stroke-width="1" opacity="0.85">
+        <line x1="60" y1="116" x2="300" y2="116" stroke-dasharray="4 6"/>
+        <line x1="60" y1="116" x2="300" y2="150"/><line x1="60" y1="116" x2="300" y2="82"/>
+      </g>
+      <circle cx="60" cy="116" r="4" fill="${GOLD}"/><circle cx="300" cy="116" r="4" fill="${GOLD}"/>`),
+  },
+  {
+    kicker: "06",
+    title: "Sparse SfM",
+    body: `<p>An essential-matrix bootstrap fixes the world frame. Each view is registered by PnP inside RANSAC with SPRT early rejection; new points are triangulated and bundle adjustment minimises reprojection error.</p>
+      <p><strong>Built-in honesty:</strong> the reported RMSE is consistency, not truth.</p>`,
+    chips: ["RMSE 2.09 px", "22/63 views", "1,175 points", "up to scale"],
+    figure: svg(`
+      <g fill="${GOLD}">${Array.from({length: 26}, (_, i) =>
+        `<circle cx="${110 + (i * 53) % 150}" cy="${90 + (i * 37) % 120}" r="2.2"/>`).join("")}</g>
+      <g fill="none" stroke="${STEEL}" stroke-width="1.4">
+        <path d="M60 60l30 18-30 18-30-18Z"/><path d="M300 60l30 18-30 18-30-18Z"/>
+        <path d="M60 200l30 18-30 18-30-18Z"/><path d="M300 200l30 18-30 18-30-18Z"/>
+        <path d="M60 78 300 78M60 78 300 218M60 218 300 78" stroke-dasharray="3 6" opacity="0.5"/>
+      </g>`),
+  },
+  {
+    kicker: "07",
+    title: "Dense depth",
+    body: `<p>For every registered view, planes of constant inverse depth are swept along the rays. A plane induces a homography; the best photo-consistency wins the pixel.</p>
+      <p>Census compares orderings instead of intensities, and SGM adds a smoothness prior that fills low-texture regions.</p>`,
+    chips: ["median 4.0 % error", "p90 29.4 %", "sub-pixel refined"],
+    figure: svg(`
+      <g stroke="${STEEL}" stroke-width="1" opacity="0.75">
+        ${Array.from({length: 5}, (_, i) => `<path d="M40 ${70 + i * 34}h280"/>`).join("")}
+      </g>
+      <g stroke="${GOLD}" stroke-width="1.4">
+        <path d="M180 220 90 70M180 220 180 70M180 220 270 70"/>
+      </g>
+      <circle cx="180" cy="220" r="4" fill="${GOLD}"/>
+      <path d="M96 104h168" stroke="${GOLD}" stroke-width="2" opacity="0.8"/>`),
+  },
+  {
+    kicker: "08",
+    title: "Fusion",
+    body: `<p>Each depth map votes: empty in front of the surface, solid behind it. The weighted average is a signed distance field whose zero crossing is the surface.</p>
+      <p>Confidence and view angle weight the votes, so a highlight cannot poison the field.</p>`,
+    chips: ["truncation follows depth noise", "451k observed voxels", "TSDF"],
+    figure: svg(`
+      <g stroke="${STEEL}" stroke-width="1">
+        ${Array.from({length: 4}, (_, r) => Array.from({length: 4}, (_, c) =>
+          `<path d="M${70 + c * 44 + r * 18} ${70 + r * 34}l44 0 0 34-44 0Z"/>`).join("")).join("")}
+      </g>
+      <g fill="${GOLD}" font-size="10" font-family="monospace">
+        <text x="92" y="92">+</text><text x="136" y="92">+</text><text x="92" y="126">−</text><text x="136" y="126">−</text>
+      </g>`),
+  },
+  {
+    kicker: "09",
+    title: "Surface and simplification",
+    body: `<p>Each cube is split into six tetrahedra; the zero crossing becomes triangles with no lookup tables. Small patches are removed, Taubin and bilateral passes de-spike the surface, and quadric error metrics spend the face budget where the shape bends.</p>`,
+    chips: ["101k raw → 87k faces", "33 patches", "Euler −97"],
+    figure: svg(`
+      <g stroke="${STEEL}" stroke-width="1.2" fill="none">
+        <path d="M90 90h140v120H90Z"/><path d="M90 90l50 40 90-40M140 130v80"/>
+      </g>
+      <path d="M90 90 140 130 230 90 90 90Z" fill="rgba(226,200,138,.12)" stroke="${GOLD}" stroke-width="1.6"/>
+      <circle cx="90" cy="90" r="3" fill="${GOLD}"/><circle cx="140" cy="130" r="3" fill="${GOLD}"/><circle cx="230" cy="90" r="3" fill="${GOLD}"/>`),
+  },
+  {
+    kicker: "10",
+    title: "Trust, measured",
+    body: `<p>Every run writes a report: mesh quality, provenance hashes, resource use and a self-assessment. Failures carry a stable code and hints.</p>
+      <p>Determinism is verified per platform; robustness is a curve, not a claim.</p>`,
+    chips: ["sha256 provenance", "quality pack", "13 failure codes", "confidence 0–1"],
+    figure: svg(`
+      <g stroke="${STEEL}" stroke-width="2" fill="none">
+        <circle cx="180" cy="140" r="60" opacity="0.35"/>
+        <circle cx="180" cy="140" r="40" opacity="0.5"/>
+      </g>
+      <path d="M180 140 180 88" stroke="${GOLD}" stroke-width="2.4"/>
+      <path d="M180 140 218 168" stroke="${GOLD}" stroke-width="2.4" opacity="0.8"/>
+      <circle cx="180" cy="140" r="5" fill="${GOLD}"/>
+      <text x="180" y="228" text-anchor="middle" fill="${STEEL}" font-size="10" font-family="monospace">confidence 0.61 · medium</text>`),
+  },
+  {
+    kicker: "11",
+    title: "What fails, and why",
+    body: `<p>Specular metal breaks photo-consistency. Plain white surfaces give NCC nothing to match. Panning without parallax cannot triangulate. Partial orbits leave open shells.</p>
+      <p>Each failure is detectable — the reports and the capture checklist tell you before the mesh does.</p>`,
+    chips: ["specular", "textureless", "no parallax", "partial coverage"],
+    figure: svg(`
+      <g stroke="${STEEL}" stroke-width="1.2" fill="none">
+        <rect x="50" y="80" width="70" height="90" rx="4"/>
+        <rect x="150" y="80" width="70" height="90" rx="4" stroke-dasharray="4 6"/>
+        <rect x="250" y="80" width="70" height="90" rx="4" stroke-dasharray="4 6"/>
+      </g>
+      <g fill="${GOLD}" font-size="9" font-family="monospace" text-anchor="middle">
+        <text x="85" y="192">glossy</text><text x="185" y="192">textureless</text><text x="285" y="192">no parallax</text>
+      </g>`),
+  },
+  {
+    kicker: "12",
+    title: "Credits",
+    body: `<p><strong>Adarsh Gupta</strong> — semester project.</p>
+      <p>Built on kornia-rs, three.js, Blender, Open3D and GStreamer. AI-assisted with OpenCode (DeepSeek V4.1 Flash); every number here comes from a measured run.</p>
+      <p><a href="https://github.com/AdarshGuptaa/meshprod" target="_blank" rel="noreferrer" style="color:${GOLD}">github.com/AdarshGuptaa/meshprod</a> · MIT</p>`,
+    chips: ["open source", "MIT", "reproducible"],
+    figure: svg(`
+      <g stroke="${GOLD}" stroke-width="1.4" fill="none">
+        <circle cx="180" cy="130" r="52"/>
+        <path d="M180 78v104M128 130h104" opacity="0.4"/>
+      </g>
+      <text x="180" y="136" text-anchor="middle" fill="${INK}" font-size="22" font-family="monospace">meshprod</text>`),
+  },
+];
+
+let slideIndex = 0;
+function renderSlides() {
+  const stage = document.getElementById("slide-stage");
+  stage.innerHTML = "";
+  SLIDES.forEach((slide, i) => {
+    const el = document.createElement("article");
+    el.className = "slide";
+    el.innerHTML = `
+      <div class="s-copy">
+        <div class="s-index">${slide.kicker}</div>
+        <h2>${slide.title}</h2>
+        <div class="s-body">${slide.body}</div>
+        <div class="s-chips">${(slide.chips || []).map((c) => `<span class="chip">${c}</span>`).join("")}</div>
+      </div>
+      <div class="s-figure">${slide.figure || ""}</div>`;
+    stage.appendChild(el);
+  });
+  const dots = document.getElementById("slide-dots");
+  dots.innerHTML = "";
+  SLIDES.forEach((_, i) => {
+    const dot = document.createElement("button");
+    dot.className = "dot";
+    dot.setAttribute("aria-label", `Slide ${i + 1}`);
+    dot.addEventListener("click", () => showSlide(i));
+    dots.appendChild(dot);
+  });
+  showSlide(0);
+}
+
+function showSlide(index) {
+  slideIndex = (index + SLIDES.length) % SLIDES.length;
+  const nodes = [...document.querySelectorAll(".slide")];
+  nodes.forEach((el, i) => {
+    el.classList.toggle("active", i === slideIndex);
+    el.classList.toggle("past", i < slideIndex);
+  });
+  [...document.querySelectorAll(".dot")].forEach((d, i) => d.classList.toggle("active", i === slideIndex));
+  document.getElementById("slide-counter").textContent = `${slideIndex + 1} / ${SLIDES.length}`;
+  document.getElementById("slide-progress").style.width = `${((slideIndex + 1) / SLIDES.length) * 100}%`;
+}
+
+document.getElementById("slide-prev").addEventListener("click", () => showSlide(slideIndex - 1));
+document.getElementById("slide-next").addEventListener("click", () => showSlide(slideIndex + 1));
+document.getElementById("slide-present").addEventListener("click", async () => {
+  activateTab("slides");
+  document.body.classList.toggle("presenting");
+  if (document.body.classList.contains("presenting")) {
+    await document.documentElement.requestFullscreen?.().catch(() => {});
+  } else {
+    await document.exitFullscreen?.().catch(() => {});
+  }
+  resizeSlides();
+});
+document.addEventListener("keydown", (e) => {
+  const slidesActive = document.getElementById("tab-slides").classList.contains("active");
+  if (!slidesActive) return;
+  if (e.key === "ArrowRight" || e.key === " ") { e.preventDefault(); showSlide(slideIndex + 1); }
+  if (e.key === "ArrowLeft") { e.preventDefault(); showSlide(slideIndex - 1); }
+  if (e.key === "Escape" && document.body.classList.contains("presenting")) {
+    document.body.classList.remove("presenting");
+  }
+});
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement) document.body.classList.remove("presenting");
+});
+
+function resizeSlides() {
+  // Slides are absolutely positioned; nothing to size, but re-assert the active
+  // class so the entrance animation plays when the tab becomes visible.
+  const active = document.querySelector(".slide.active");
+  if (active) {
+    active.classList.remove("active");
+    requestAnimationFrame(() => active.classList.add("active"));
+  }
+}
+
 /* ---------- three.js viewer ---------- */
 const viewerHost = document.getElementById("viewer");
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x20272c);
+scene.background = new THREE.Color(0x1b2228);
 const camera = new THREE.PerspectiveCamera(50, 1, 0.001, 1e7);
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 viewerHost.appendChild(renderer.domElement);
@@ -480,16 +824,20 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 
-scene.add(new THREE.HemisphereLight(0xfdfaf2, 0x2a3339, 1.1));
-const key = new THREE.DirectionalLight(0xffffff, 2.1);
+scene.add(new THREE.HemisphereLight(0xfdfaf2, 0x2a3339, 1.15));
+const key = new THREE.DirectionalLight(0xffffff, 2.0);
 key.position.set(3, 5, 4);
 scene.add(key);
 const fill = new THREE.DirectionalLight(0xcfd9de, 0.7);
 fill.position.set(-4, 2, -3);
 scene.add(fill);
+const rim = new THREE.DirectionalLight(0xe2c88a, 0.5);
+rim.position.set(0, -4, -5);
+scene.add(rim);
 
 let current = null;
 let originalColors = null;
+let introUntil = 0;
 const loader = new PLYLoader();
 
 function loadMesh() {
@@ -498,16 +846,19 @@ function loadMesh() {
     `/api/mesh/mesh?t=${Date.now()}`,
     (geometry) => {
       geometry.computeVertexNormals();
-      const hasColor = Boolean(geometry.attributes.color);
-      originalColors = hasColor ? Float32Array.from(geometry.attributes.color.array) : null;
+      originalColors = geometry.attributes.color
+        ? Float32Array.from(geometry.attributes.color.array)
+        : null;
       if (current) {
         scene.remove(current);
         current.geometry.dispose();
+        current.material.dispose();
       }
       current = new THREE.Mesh(geometry, makeMaterial("colour", geometry));
       scene.add(current);
       fitCamera(geometry);
       document.getElementById("viewer-empty").classList.add("hidden");
+      introUntil = performance.now() + 3500;
     },
     undefined,
     () => appendLog("mesh load failed"),
@@ -538,7 +889,7 @@ function heightColors(geometry) {
   }
   const span = Math.max(max - min, 1e-9);
   const colors = new Float32Array(pos.count * 3);
-  const low = new THREE.Color(0x3c4a55);
+  const low = new THREE.Color(0x24405e);
   const high = new THREE.Color(0xe8dfc8);
   for (let i = 0; i < pos.count; i++) {
     const t = (pos.getY(i) - min) / span;
@@ -555,9 +906,9 @@ function makeMaterial(style, geometry) {
     case "clay":
       return new THREE.MeshStandardMaterial({ color: 0xe9e1d0, roughness: 0.85, metalness: 0.02 });
     case "normals":
-      return new THREE.MeshNormalMaterial({ flatShading: false });
+      return new THREE.MeshNormalMaterial();
     case "wireframe":
-      return new THREE.MeshBasicMaterial({ wireframe: true, color: 0xa9bcc6 });
+      return new THREE.MeshBasicMaterial({ wireframe: true, color: 0xc9b071 });
     case "xray":
       return new THREE.MeshStandardMaterial({
         color: 0x9db4bf, transparent: true, opacity: 0.22,
@@ -584,41 +935,58 @@ document.querySelectorAll("[data-style]").forEach((btn) => {
     if (!current) return;
     const style = btn.dataset.style;
     if (style !== "height" && originalColors && current.geometry.attributes.color) {
-      current.geometry.setAttribute(
-        "color",
-        new THREE.BufferAttribute(Float32Array.from(originalColors), 3),
-      );
+      current.geometry.setAttribute("color", new THREE.BufferAttribute(Float32Array.from(originalColors), 3));
     }
     current.material.dispose();
     current.material = makeMaterial(style, current.geometry);
   });
 });
 
-function resize() {
+controls.addEventListener("start", () => { introUntil = 0; });
+
+function resizeViewer() {
   const { clientWidth: w, clientHeight: h } = viewerHost;
   if (w === 0 || h === 0) return;
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }
-new ResizeObserver(resize).observe(viewerHost);
+new ResizeObserver(resizeViewer).observe(viewerHost);
 
 renderer.setAnimationLoop(() => {
+  if (!viewerActive) return;
+  if (current && performance.now() < introUntil) current.rotation.y += 0.0035;
   controls.update();
   renderer.render(scene, camera);
 });
 
 /* ---------- boot ---------- */
-async function boot() {
-  const res = await fetch("/api/defaults", { cache: "no-store" });
-  config = await res.json();
+function firstPaint() {
   renderGroups();
+  renderGuide();
   bindIntrinsics();
   renderAltai();
-  resize();
+  renderSlides();
+  chartData = SEED_HISTORY;
+  drawHistory();
+  resizeViewer();
+  const initial = location.hash.replace("#", "");
+  if (initial) activateTab(initial);
+  document.getElementById("log").textContent = "waiting for a run…";
+}
+
+async function syncWithServer() {
+  try {
+    config = await (await fetch("/api/defaults", { cache: "no-store" })).json();
+    renderGroups();
+    bindIntrinsics();
+  } catch {
+    /* offline: defaults are already rendered */
+  }
   await loadHistory();
   await loadDiagnostics();
   poll();
 }
 
-boot();
+firstPaint();
+syncWithServer();

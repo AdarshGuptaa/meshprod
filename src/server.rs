@@ -304,9 +304,15 @@ async fn run(
             return Err((StatusCode::CONFLICT, "a run is already in progress".into()));
         }
     }
-    let mut video_bytes: Option<Vec<u8>> = None;
     let mut filename = "input.mp4".to_string();
     let mut config = Config::default();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let stem = format!("run-{stamp}");
+    let video_path = app.dir.join(format!("{stem}.mp4"));
+    let mut video_written = false;
 
     while let Some(field) = multipart
         .next_field()
@@ -318,13 +324,24 @@ async fn run(
                 if let Some(name) = field.file_name() {
                     filename = name.to_string();
                 }
-                video_bytes = Some(
-                    field
-                        .bytes()
+                // Stream straight to disk: a 1 GB clip must not also live in RAM.
+                let mut file = tokio::fs::File::create(&video_path)
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                let mut field = field;
+                while let Some(chunk) = field
+                    .chunk()
+                    .await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
+                {
+                    tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
                         .await
-                        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
-                        .to_vec(),
-                );
+                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                }
+                tokio::io::AsyncWriteExt::flush(&mut file)
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                video_written = true;
             }
             Some("config") => {
                 let text = field
@@ -338,26 +355,20 @@ async fn run(
         }
     }
 
-    let video_bytes = video_bytes.ok_or((StatusCode::BAD_REQUEST, "no video uploaded".into()))?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let stem = format!("run-{stamp}");
-    let video_path = app.dir.join(format!("{stem}.mp4"));
-    std::fs::write(&video_path, &video_bytes)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if !video_written {
+        return Err((StatusCode::BAD_REQUEST, "no video uploaded".into()));
+    }
     let output = app.dir.join(format!("{stem}.ply"));
+    let size_mb = std::fs::metadata(&video_path)
+        .map(|m| m.len() / 1_048_576)
+        .unwrap_or(0);
 
     {
         let mut job = app.job.lock().unwrap();
         *job = Job {
             status: "running".into(),
             stage: 0,
-            log: vec![format!(
-                "uploaded {filename} ({} MB)",
-                video_bytes.len() / 1_048_576
-            )],
+            log: vec![format!("uploaded {filename} ({size_mb} MB)")],
             stats: Stats::default(),
             error: None,
             report: None,
@@ -377,7 +388,8 @@ async fn run(
         let mut cmd = Command::new(exe);
         cmd.arg(&video_path).arg("--output").arg(&out_path);
         cmd.args(build_args(&cfg));
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        // stdout is unused; leaving it piped would block the child once full.
+        cmd.stdout(Stdio::null()).stderr(Stdio::piped());
 
         let started = std::time::Instant::now();
         let mut child = match cmd.spawn() {
@@ -595,14 +607,6 @@ fn parse_line(line: &str, job: &mut Job) {
     }
     if let Some(idx) = line.find("wrote mesh (") {
         let rest = &line[idx..];
-        for (key, set) in [
-            ("faces,", 0usize),
-            ("patches=", 1usize),
-            ("euler=", 2usize),
-            ("closed=", 3usize),
-        ] {
-            let _ = (key, set);
-        }
         if let Some(i) = rest.find(" faces, patches=") {
             let head = &rest[..i];
             if let Some(v) = head.split_whitespace().last() {

@@ -677,6 +677,14 @@ pub fn estimate_depth_maps(
     let census: Vec<CensusMap> = if cfg.method == CostMethod::Ncc {
         Vec::new()
     } else {
+        let pixels: usize = gray_frames.iter().map(|f| f.width() * f.height()).sum();
+        let estimate_mb = pixels * 4 / 1_048_576;
+        if estimate_mb > 1024 {
+            eprintln!(
+                "  warning: census maps need about {estimate_mb} MB for this clip; \
+                 consider a larger --frame-step or a shorter segment"
+            );
+        }
         gray_frames.iter().map(compute_census).collect()
     };
 
