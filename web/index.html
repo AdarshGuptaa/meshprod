@@ -78,6 +78,13 @@
           <a class="ghost" id="download-mesh" download>Download PLY</a>
         </div>
 
+        <div class="error-banner" id="error-banner" hidden>
+          <div class="error-head">
+            <span class="badge bad" id="error-code">error</span>
+            <strong id="error-message"></strong>
+          </div>
+          <ul id="error-hints"></ul>
+        </div>
         <div class="stages" id="stages"></div>
         <pre class="log" id="log"></pre>
       </section>
@@ -103,8 +110,18 @@
         <p class="hint">Seeded with the measured knife / lip-balm / keyboard runs; new UI runs append here.</p>
       </div>
       <div class="panel">
+        <h2>Run report (trust metrics)</h2>
+        <div class="cards" id="report-cards"></div>
+        <pre class="log small" id="report-json"></pre>
+      </div>
+      <div class="panel">
         <h2>EU ALTAI requirements</h2>
         <div class="altai" id="altai"></div>
+      </div>
+      <div class="panel">
+        <h2>Failure catalogue</h2>
+        <p class="hint">Every pipeline failure has a stable code and actionable hints. The UI shows them when a run fails.</p>
+        <div class="diag" id="diagnostics"></div>
       </div>
       <div class="panel">
         <h2>Trust controls</h2>

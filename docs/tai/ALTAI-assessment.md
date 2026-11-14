@@ -146,6 +146,23 @@ halves coverage (lip balm 19 k → 2.5 k faces). Needle-triangle removal is also
 opt-in: at aspect 8 it repaired slivers but opened ~7 k edges (Euler −97 →
 −7246), so the defaults keep Taubin + bilateral as the de-spiking path.
 
+### 2.1f Named failures and metric trustworthiness
+
+Failures are first-class artefacts: `<output>_error.json` carries a stable
+code, a description, actionable hints and the failing stage; the web UI renders
+it as a banner and ships the full 13-code catalogue in the Trust tab. Success
+runs emit `<output>_report.json` with a mesh-quality pack (closedness, Euler,
+patch count, boundary-edge ratio, degenerate-face and needle fractions),
+provenance (video SHA-256 + exact arguments + version), resource use (elapsed,
+peak RSS) and a **self-assessment** confidence derived from depth error,
+coverage and closedness.
+
+This turns transparency and accountability into numbers: a reviewer can check
+the quality pack, reproduce the exact run from the provenance, and compare
+self-assessment with the actual outcome. `scripts/tai_metrics.sh` adds a
+controlled perturbation suite (resolution, blur, noise, frame drop) so
+robustness is measured as a curve rather than asserted.
+
 ### 2.2 Repeatability (determinism)
 
 Two independent full runs produced **byte-identical** outputs:

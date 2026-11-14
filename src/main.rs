@@ -13,6 +13,7 @@
 
 mod dense;
 mod dense_sgm;
+mod error;
 mod features;
 mod matching;
 mod mesh;
@@ -36,6 +37,7 @@ use argh::FromArgs;
 use kornia_algebra::Vec3F64;
 use kornia_calib::build_tracks;
 use kornia_image::Image;
+use sha2::{Digest, Sha256};
 
 #[derive(FromArgs)]
 /// Structure-from-Motion from a video file to a simplified triangle mesh.
@@ -288,38 +290,53 @@ fn build_sprt_config(
     Ok(Some(cfg))
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() {
     let args: Args = argh::from_env();
-
     if args.serve {
-        return server::serve(args.port);
+        if let Err(e) = server::serve(args.port) {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+        return;
     }
-    let video_path = args
-        .video
-        .clone()
-        .ok_or("missing input video (or pass --serve for the web UI)")?;
+    let output = args.output.clone();
+    if let Err(e) = run(args) {
+        eprintln!("error: {e}");
+        if let Some(named) = e.downcast_ref::<error::PipelineError>() {
+            error::write_error_file(&output, named);
+            eprintln!("  code:  {}", named.code());
+            eprintln!("  hints:");
+            for hint in named.hints() {
+                eprintln!("   - {hint}");
+            }
+        }
+        std::process::exit(1);
+    }
+}
+
+fn run(args: Args) -> Result<(), Box<dyn Error>> {
+    let started = Instant::now();
+    let video_path = args.video.clone().ok_or(error::PipelineError::VideoDecode(
+        "no input video given".into(),
+    ))?;
     let output_path = args.output.clone();
-    let fx = args.fx.ok_or("missing --fx")?;
-    let fy = args.fy.ok_or("missing --fy")?;
-    let cx = args.cx.ok_or("missing --cx")?;
-    let cy = args.cy.ok_or("missing --cy")?;
+    let fx = args.fx.ok_or(error::PipelineError::MissingIntrinsics)?;
+    let fy = args.fy.ok_or(error::PipelineError::MissingIntrinsics)?;
+    let cx = args.cx.ok_or(error::PipelineError::MissingIntrinsics)?;
+    let cy = args.cy.ok_or(error::PipelineError::MissingIntrinsics)?;
 
-    // Configure the rayon thread pool (0 = auto-detect).
     features::configure_thread_pool(args.threads)?;
-
-    // Reject zero values up front rather than panicking deep in the pipeline.
     validate_positive_args(args.frame_step, args.match_window)
-        .map_err(|e| -> Box<dyn Error> { e.into() })?;
-
-    // Validate SPRT before the pipeline runs; an invalid config would otherwise
-    // silently disable it.
+        .map_err(error::PipelineError::InvalidArgs)?;
     let sprt = build_sprt_config(args.sprt, args.sprt_epsilon, args.sprt_delta)
-        .map_err(|e| -> Box<dyn Error> { e.into() })?;
+        .map_err(error::PipelineError::InvalidArgs)?;
 
     // 1. Decode frames.
+    error::set_stage(1);
     eprintln!("[1/9] reading video: {}", video_path.display());
     let t = Instant::now();
-    let (rgb_frames, gray_frames) = video::read_frames(&video_path, args.frame_step)?;
+    let (rgb_frames, gray_frames) = video::read_frames(&video_path, args.frame_step)
+        .map_err(|e| error::PipelineError::VideoDecode(e.to_string()))?;
     let n_frames = gray_frames.len();
     let (frame_w, frame_h) = rgb_frames
         .first()
@@ -333,7 +350,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         t.elapsed().as_secs_f64()
     );
     if n_frames < 2 {
-        return Err("need at least two frames to reconstruct".into());
+        return Err(error::PipelineError::NotEnoughFrames { got: n_frames }.into());
     }
     if n_frames > 200 {
         eprintln!(
@@ -350,6 +367,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             args.detector
         );
     }
+    error::set_stage(2);
     eprintln!("[2/9] extracting features with {:?}", args.detector);
     if use_cuda {
         eprintln!("[2/9] CUDA SIFT extraction (device 0)");
@@ -364,7 +382,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .collect::<Result<_, _>>()?
     } else {
         features::extract_features_parallel(&gray_frames, extractor.as_ref())
-            .map_err(|e| -> Box<dyn Error> { e.into() })?
+            .map_err(error::PipelineError::Processing)?
     };
     let total_keypoints: usize = all_features.iter().map(|f| f.n_keypoints()).sum();
     eprintln!(
@@ -386,6 +404,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     // 3. Match frames in a sliding window (parallel via rayon).
+    error::set_stage(3);
     eprintln!("[3/9] matching frames (window={})", args.match_window);
     let t = Instant::now();
     let mut edges = matching::match_pairs_parallel(
@@ -393,7 +412,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         args.match_window,
         args.ratio,
         cuda_matcher.as_ref(),
-    )?;
+    )
+    .map_err(error::PipelineError::Processing)?;
     eprintln!(
         "[3/9] found {} matched correspondences in {:.1}s",
         edges.len(),
@@ -448,6 +468,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     // 4. Chain matches into multi-view tracks.
+    error::set_stage(4);
     eprintln!("[4/9] building tracks");
     let t = Instant::now();
     let tracks = build_tracks(&edges);
@@ -462,6 +483,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let observation_colors = ply_writer::sample_observation_colors(&tracks, &rgb_frames);
 
     // 5. Reconstruct the scene.
+    error::set_stage(5);
     eprintln!("[5/9] reconstructing scene");
     let t = Instant::now();
     let progress_start = Instant::now();
@@ -481,8 +503,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         refine_intrinsics: args.refine_intrinsics.then_some(true),
     };
     let reconstruction =
-        reconstruction::run_sfm(&tracks, fx, fy, cx, cy, n_frames, Some(progress), overrides)?;
+        reconstruction::run_sfm(&tracks, fx, fy, cx, cy, n_frames, Some(progress), overrides)
+            .map_err(|e| error::PipelineError::BootstrapFailed(e.to_string()))?;
     let registered = reconstruction.views.iter().filter(|v| v.is_some()).count();
+    if registered == 0 {
+        return Err(error::PipelineError::BootstrapFailed("no view registered".into()).into());
+    }
+    if registered * 10 < n_frames {
+        return Err(error::PipelineError::LowRegistration {
+            registered,
+            total: n_frames,
+        }
+        .into());
+    }
     eprintln!(
         "[5/9] reconstructed {} points across {} registered views (scale: {:?}, rmse {:.3} px) in {:.1}s",
         reconstruction.points.len(),
@@ -544,10 +577,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         sgm_paths: args.sgm_paths,
         census_max_cost: 0.35,
     };
+    let mut texture: Option<f64> = None;
     let mut target_faces = args.target_faces;
     let mut min_component_faces = args.min_component_faces;
     if args.auto_config {
         let score = texture_score(&gray_frames);
+        texture = Some(score);
         let (low, medium) = (score < 0.012, score < 0.035);
         // Census WTA is ambiguous on perfectly flat regions (identical codes
         // give cost zero), which reconstructs the tabletop as if it were the
@@ -588,7 +623,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             dense_cfg.lr_required
         );
     }
-    let maps = dense::estimate_depth_maps(&reconstruction, &cameras, &gray_frames, &dense_cfg)?;
+    let maps = dense::estimate_depth_maps(&reconstruction, &cameras, &gray_frames, &dense_cfg)
+        .map_err(|_| error::PipelineError::NoDepthMaps)?;
     let n_maps = maps.iter().flatten().count();
     let n_valid: usize = maps
         .iter()
@@ -600,7 +636,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         t.elapsed().as_secs_f64()
     );
     if n_maps == 0 {
-        return Err("no depth maps were produced from the registered views".into());
+        return Err(error::PipelineError::NoDepthMaps.into());
     }
     let (checked, median_err, p90_err) =
         dense::sparse_depth_check(&reconstruction, &maps, &cameras);
@@ -649,6 +685,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             t.elapsed().as_secs_f64()
         );
     }
+    if cloud.points.is_empty() {
+        return Err(error::PipelineError::EmptyCloud.into());
+    }
     if args.auto_config && !cloud.points.is_empty() {
         target_faces = (cloud.points.len() / 20).clamp(10_000, 150_000);
         min_component_faces = (target_faces / 500).max(200);
@@ -676,7 +715,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             depth_noise_relative: (checked > 0).then_some(median_err),
             ncc_min: args.ncc_min,
         },
-    )?;
+    )
+    .map_err(|_| error::PipelineError::EmptyCloud)?;
     eprintln!(
         "[7/9] volume {}x{}x{} at {:.4} units/voxel in {:.1}s",
         volume.dims[0],
@@ -718,9 +758,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // 8. Extract the surface, simplify it, and compute vertex attributes.
+    error::set_stage(8);
     eprintln!("[8/9] extracting surface and simplifying");
     let t = Instant::now();
     let mut mesh = mesh::marching_tetrahedra(&volume);
+    let raw_faces = mesh.face_count();
     eprintln!(
         "  raw mesh: {} vertices, {} faces, {} patches",
         mesh.vertex_count(),
@@ -728,10 +770,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         mesh.connected_components()
     );
     if mesh.face_count() == 0 {
-        return Err(
-            "the TSDF produced an empty mesh; try a lower --ncc-min or a higher --voxel-resolution"
-                .into(),
-        );
+        return Err(error::PipelineError::EmptyMesh.into());
     }
     if args.needle_aspect > 0.0 {
         let before = mesh.face_count();
@@ -748,6 +787,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             mesh.face_count(),
             mesh.connected_components()
         );
+    }
+    if mesh.face_count() == 0 {
+        return Err(error::PipelineError::MeshPruned.into());
     }
     if args.smooth_iterations > 0 {
         let t = Instant::now();
@@ -862,7 +904,97 @@ fn main() -> Result<(), Box<dyn Error>> {
         oriented_path.display()
     );
 
+    // Machine-readable run report: metrics, provenance, resources and a
+    // heuristic self-assessment, consumed by the web UI and the TAI report.
+    let quality = mesh::quality_report(&mesh);
+    let coverage = registered as f64 / n_frames.max(1) as f64;
+    let depth_term = (1.0 - (median_err * 100.0 / 25.0)).clamp(0.0, 1.0);
+    let confidence = (0.55 * depth_term
+        + 0.30 * coverage.min(1.0)
+        + 0.15 * if quality.closed { 1.0 } else { 0.6 })
+    .clamp(0.0, 1.0);
+    let verdict = if confidence >= 0.75 {
+        "high"
+    } else if confidence >= 0.5 {
+        "medium"
+    } else {
+        "low"
+    };
+    let report = serde_json::json!({
+        "status": "ok",
+        "elapsed_s": started.elapsed().as_secs_f64(),
+        "stats": {
+            "views": registered,
+            "total_views": n_frames,
+            "points": reconstruction.points.len(),
+            "rmse_px": reconstruction.reproj_rmse_px,
+            "depth_samples": checked,
+            "depth_median_pct": median_err * 100.0,
+            "depth_p90_pct": p90_err * 100.0,
+            "depth_maps": n_maps,
+            "depth_pixels": n_valid,
+            "raw_faces": raw_faces,
+            "faces": mesh.face_count(),
+            "texture": texture,
+            "cost": format!("{:?}", dense_cfg.method).to_lowercase(),
+        },
+        "mesh_quality": quality,
+        "provenance": {
+            "video_sha256": sha256_file(&video_path).unwrap_or_default(),
+            "args": std::env::args().collect::<Vec<_>>().join(" "),
+            "version": env!("CARGO_PKG_VERSION"),
+        },
+        "resources": { "peak_rss_kb": peak_rss_kb() },
+        "self_assessment": { "confidence": confidence, "verdict": verdict },
+    });
+    let report_path = error::sibling_json(&output_path, "_report");
+    std::fs::write(
+        &report_path,
+        serde_json::to_string_pretty(&report).unwrap_or_default(),
+    )
+    .map_err(|e| error::PipelineError::Io {
+        path: report_path.display().to_string(),
+        message: e.to_string(),
+    })?;
+    eprintln!("[9/9] wrote run report to {}", report_path.display());
+
     Ok(())
+}
+
+/// SHA-256 of a file, for provenance.
+fn sha256_file(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 65536];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Peak resident set size in KiB (0 where unsupported).
+fn peak_rss_kb() -> u64 {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|text| {
+                text.lines()
+                    .find(|l| l.starts_with("VmHWM:"))
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .and_then(|v| v.parse().ok())
+            })
+            .unwrap_or(0)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        0
+    }
 }
 
 /// Sibling output path: `<stem><suffix><ext>` next to `output`.

@@ -193,6 +193,32 @@ kornia-imgproc = { path = "../kornia-rs-semproj/crates/kornia-imgproc" }
 kornia-io      = { path = "../kornia-rs-semproj/crates/kornia-io" }
 ```
 
+## Named failures and trust metrics
+
+Every failure exits non-zero with a **stable code, a description and actionable
+hints**, writes `<output>_error.json`, and is rendered as a banner in the web
+UI (the Trust tab also lists the full catalogue):
+
+| Code | Meaning |
+|---|---|
+| `invalid-args` / `missing-intrinsics` | rejected before the pipeline |
+| `video-decode` / `not-enough-frames` | no usable frames |
+| `bootstrap-failed` / `low-registration` | SfM could not anchor (<10 % views) |
+| `no-depth-maps` / `empty-cloud` | dense stage produced nothing |
+| `empty-mesh` / `mesh-pruned` | TSDF or cleanup removed the surface |
+| `cuda-unavailable` / `processing-error` / `io-error` | environment failures |
+
+A successful run writes `<output>_report.json` with the **metric pack**:
+
+- `stats` — views, RMSE, depth error (median/p90), depth maps, raw/final faces, cost, texture
+- `mesh_quality` — closed, Euler, patches, boundary-edge ratio, degenerate faces, needle fraction
+- `provenance` — video SHA-256, exact CLI args, version (a run is reproducible)
+- `resources` — elapsed seconds, peak RSS
+- `self_assessment` — heuristic confidence (0–1) and verdict from depth error, coverage and closedness
+
+`scripts/tai_metrics.sh <video>` runs the **robustness suite** (baseline, 360p,
+blur, noise, frame drop) and prints a comparison table from the reports.
+
 ## Deploying on Linux / Windows
 
 The CPU pipeline is pure Rust. The only system dependency is **GStreamer 1.20+**

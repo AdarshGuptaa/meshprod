@@ -7,6 +7,8 @@
 
 use std::collections::HashMap;
 
+use serde::Serialize;
+
 use kornia_3d::camera::PinholeCamera;
 use kornia_3d::pose::Pose3d;
 use kornia_algebra::Vec3F64;
@@ -462,6 +464,66 @@ pub fn remove_needle_triangles(mesh: &Mesh, max_aspect: f64) -> Mesh {
     Mesh { positions, faces }
 }
 
+/// Measured quality of a mesh, for the trustworthiness report.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct MeshQuality {
+    /// Vertices.
+    pub vertices: usize,
+    /// Triangles.
+    pub faces: usize,
+    /// Connected patches.
+    pub patches: usize,
+    /// Every edge shared by exactly two faces.
+    pub closed: bool,
+    /// Euler characteristic.
+    pub euler: i64,
+    /// Fraction of edges that are boundaries (0 = watertight).
+    pub boundary_edge_ratio: f64,
+    /// Faces with near-zero area.
+    pub degenerate_faces: usize,
+    /// Fraction of faces with longest/shortest edge > 10.
+    pub needle_fraction: f64,
+}
+
+/// Compute the mesh quality pack.
+pub fn quality_report(mesh: &Mesh) -> MeshQuality {
+    let mut edges: HashMap<(u32, u32), u32> = HashMap::new();
+    let mut degenerate = 0usize;
+    let mut needles = 0usize;
+    for f in &mesh.faces {
+        let [a, b, c] = [
+            mesh.positions[f[0] as usize],
+            mesh.positions[f[1] as usize],
+            mesh.positions[f[2] as usize],
+        ];
+        let area = (b - a).cross(c - a).length() * 0.5;
+        if area < 1e-14 {
+            degenerate += 1;
+        }
+        let mut e = [(b - a).length(), (c - b).length(), (a - c).length()];
+        e.sort_by(f64::total_cmp);
+        if e[0] > 1e-12 && e[2] / e[0] > 10.0 {
+            needles += 1;
+        }
+        for (u, v) in [(f[0], f[1]), (f[1], f[2]), (f[2], f[0])] {
+            let key = if u < v { (u, v) } else { (v, u) };
+            *edges.entry(key).or_default() += 1;
+        }
+    }
+    let total_edges = edges.len().max(1) as f64;
+    let boundary = edges.values().filter(|&&c| c == 1).count() as f64;
+    MeshQuality {
+        vertices: mesh.vertex_count(),
+        faces: mesh.face_count(),
+        patches: mesh.connected_components(),
+        closed: mesh.is_closed(),
+        euler: mesh.euler_characteristic(),
+        boundary_edge_ratio: boundary / total_edges,
+        degenerate_faces: degenerate,
+        needle_fraction: needles as f64 / mesh.face_count().max(1) as f64,
+    }
+}
+
 /// Area-weighted vertex normals.
 pub fn vertex_normals_from_faces(mesh: &Mesh) -> Vec<Vec3F64> {
     let mut normals = vec![Vec3F64::ZERO; mesh.positions.len()];
@@ -805,6 +867,18 @@ mod tests {
         );
         assert!(smoothed.is_closed(), "topology must be preserved");
         assert_eq!(smoothed.face_count(), noisy.face_count());
+    }
+
+    #[test]
+    fn quality_report_flags_a_clean_sphere_as_closed() {
+        let vol = sphere_volume(40, 0.1, 1.23, 0.4);
+        let mesh = marching_tetrahedra(&vol);
+        let q = quality_report(&mesh);
+        assert!(q.closed);
+        assert!((q.boundary_edge_ratio - 0.0).abs() < 1e-9);
+        assert_eq!(q.degenerate_faces, 0);
+        assert!(q.needle_fraction < 0.05);
+        assert_eq!(q.euler, 2);
     }
 
     #[test]

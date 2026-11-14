@@ -217,6 +217,7 @@ runButton.addEventListener("click", async () => {
   fd.append("config", JSON.stringify(config));
   runButton.disabled = true;
   lastMeshKey = null;
+  hideError();
   try {
     const res = await fetch("/api/run", { method: "POST", body: fd });
     if (!res.ok) throw new Error(await res.text());
@@ -247,6 +248,8 @@ function applyStatus(data) {
   renderStages(data.stage, data.status);
   renderLog(data.log);
   renderCards(stats);
+  renderError(data.error);
+  if (data.report) renderReport(data.report);
   runButton.disabled = data.status === "running";
   runButton.textContent = data.status === "running" ? "Reconstructing…" : "Run reconstruction";
 
@@ -316,6 +319,83 @@ function renderCards(s) {
     card.className = "card";
     card.innerHTML = `<div class="k">${k}</div><div class="v">${v}</div>`;
     host.appendChild(card);
+  }
+}
+
+/* ---------- named errors ---------- */
+function hideError() {
+  document.getElementById("error-banner").hidden = true;
+}
+
+function renderError(err) {
+  const banner = document.getElementById("error-banner");
+  if (!err) {
+    banner.hidden = true;
+    return;
+  }
+  banner.hidden = false;
+  document.getElementById("error-code").textContent = err.code || "error";
+  document.getElementById("error-message").textContent =
+    `${err.message || "pipeline failed"}${err.stage ? ` · stage ${err.stage}` : ""}`;
+  const hints = document.getElementById("error-hints");
+  hints.innerHTML = "";
+  for (const hint of err.hints || []) {
+    const li = document.createElement("li");
+    li.textContent = hint;
+    hints.appendChild(li);
+  }
+}
+
+/* ---------- run report (trust metrics) ---------- */
+function renderReport(report) {
+  const q = report.mesh_quality || {};
+  const p = report.provenance || {};
+  const r = report.resources || {};
+  const self = report.self_assessment || {};
+  const entries = [
+    ["Self-assessment", self.confidence != null ? `${(self.confidence * 100).toFixed(0)} % (${self.verdict})` : "—"],
+    ["Closed mesh", q.closed ? "yes" : "no"],
+    ["Boundary edges", q.boundary_edge_ratio != null ? `${(q.boundary_edge_ratio * 100).toFixed(1)} %` : "—"],
+    ["Degenerate faces", q.degenerate_faces ?? "—"],
+    ["Needle faces", q.needle_fraction != null ? `${(q.needle_fraction * 100).toFixed(1)} %` : "—"],
+    ["Peak RSS", r.peak_rss_kb ? `${(r.peak_rss_kb / 1024).toFixed(0)} MB` : "—"],
+    ["Elapsed", report.elapsed_s != null ? `${report.elapsed_s.toFixed(1)} s` : "—"],
+    ["Video hash", p.video_sha256 ? `${p.video_sha256.slice(0, 12)}…` : "—"],
+    ["Version", p.version ?? "—"],
+  ];
+  const host = document.getElementById("report-cards");
+  host.innerHTML = "";
+  for (const [k, v] of entries) {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `<div class="k">${k}</div><div class="v">${v}</div>`;
+    host.appendChild(card);
+  }
+  document.getElementById("report-json").textContent = JSON.stringify(report, null, 2);
+}
+
+/* ---------- failure catalogue ---------- */
+async function loadDiagnostics() {
+  const res = await fetch("/api/diagnostics", { cache: "no-store" });
+  const rows = await res.json();
+  const host = document.getElementById("diagnostics");
+  host.innerHTML = "";
+  for (const row of rows) {
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.innerHTML = `<code>${row.code}</code>`;
+    details.appendChild(summary);
+    const description = document.createElement("p");
+    description.textContent = row.description;
+    details.appendChild(description);
+    const list = document.createElement("ul");
+    for (const hint of row.hints || []) {
+      const li = document.createElement("li");
+      li.textContent = hint;
+      list.appendChild(li);
+    }
+    details.appendChild(list);
+    host.appendChild(details);
   }
 }
 
@@ -537,6 +617,7 @@ async function boot() {
   renderAltai();
   resize();
   await loadHistory();
+  await loadDiagnostics();
   poll();
 }
 

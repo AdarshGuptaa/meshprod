@@ -19,6 +19,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::error;
+
 /// Every CLI knob, mirrored for the web form.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -137,6 +139,8 @@ struct Job {
     stage: usize,
     log: Vec<String>,
     stats: Stats,
+    error: Option<serde_json::Value>,
+    report: Option<serde_json::Value>,
     video: Option<PathBuf>,
     output: Option<PathBuf>,
 }
@@ -170,6 +174,8 @@ pub fn serve(port: u16) -> Result<(), Box<dyn std::error::Error>> {
             stage: 0,
             log: Vec::new(),
             stats: Stats::default(),
+            error: None,
+            report: None,
             video: None,
             output: None,
         })),
@@ -184,6 +190,7 @@ pub fn serve(port: u16) -> Result<(), Box<dyn std::error::Error>> {
             .route("/api/defaults", get(defaults))
             .route("/api/status", get(status))
             .route("/api/history", get(history))
+            .route("/api/diagnostics", get(diagnostics))
             .route("/api/run", post(run))
             .route("/api/mesh/{kind}", get(mesh))
             .fallback_service(tower_http::services::ServeDir::new("web"))
@@ -241,6 +248,10 @@ async fn defaults() -> Json<Config> {
     Json(Config::default())
 }
 
+async fn diagnostics() -> Json<Vec<serde_json::Value>> {
+    Json(error::catalogue())
+}
+
 async fn history(State(app): State<App>) -> Json<Vec<RunSummary>> {
     Json(app.history.lock().unwrap().clone())
 }
@@ -251,6 +262,8 @@ struct StatusView {
     stage: usize,
     log: Vec<String>,
     stats: Stats,
+    error: Option<serde_json::Value>,
+    report: Option<serde_json::Value>,
     video: Option<String>,
     kinds: Vec<String>,
 }
@@ -270,6 +283,8 @@ async fn status(State(app): State<App>) -> Json<StatusView> {
         stage: job.stage,
         log: job.log[log_start..].to_vec(),
         stats: job.stats.clone(),
+        error: job.error.clone(),
+        report: job.report.clone(),
         video: job
             .video
             .as_ref()
@@ -344,6 +359,8 @@ async fn run(
                 video_bytes.len() / 1_048_576
             )],
             stats: Stats::default(),
+            error: None,
+            report: None,
             video: Some(video_path.clone()),
             output: None,
         };
@@ -388,6 +405,33 @@ async fn run(
         if code == Some(0) && out_path.exists() {
             j.status = "done".into();
             j.output = Some(out_path.clone());
+            // Prefer the machine-readable report over log parsing.
+            let report_path = error::sibling_json(&out_path, "_report");
+            if let Ok(text) = std::fs::read_to_string(&report_path) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if let Some(stats) = json.get("stats") {
+                        let get = |key: &str| stats.get(key).cloned().unwrap_or_default();
+                        j.stats.views = get("views").as_u64().map(|v| v as usize);
+                        j.stats.points = get("points").as_u64().map(|v| v as usize);
+                        j.stats.rmse = get("rmse_px").as_f64();
+                        j.stats.depth_median = get("depth_median_pct").as_f64();
+                        j.stats.depth_p90 = get("depth_p90_pct").as_f64();
+                        j.stats.raw_faces = get("raw_faces").as_u64().map(|v| v as usize);
+                        j.stats.faces = get("faces").as_u64().map(|v| v as usize);
+                        j.stats.cost = get("cost").as_str().map(|s| s.to_string());
+                        j.stats.texture = get("texture").as_f64();
+                    }
+                    if let Some(q) = json.get("mesh_quality") {
+                        j.stats.patches = q
+                            .get("patches")
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v as usize);
+                        j.stats.euler = q.get("euler").and_then(|v| v.as_i64());
+                        j.stats.closed = q.get("closed").and_then(|v| v.as_bool());
+                    }
+                    j.report = Some(json);
+                }
+            }
             let stats = j.stats.clone();
             let summary = RunSummary {
                 name: run_name,
@@ -410,6 +454,15 @@ async fn run(
             let _ = std::fs::write(&history_path, serde_json::to_string_pretty(&*hist).unwrap());
         } else {
             j.status = "error".into();
+            let error_path = error::sibling_json(&out_path, "_error");
+            if let Ok(text) = std::fs::read_to_string(&error_path) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if let Some(stage) = json.get("stage").and_then(|v| v.as_u64()) {
+                        j.stage = stage as usize;
+                    }
+                    j.error = Some(json);
+                }
+            }
             j.log.push(format!("pipeline exited with code {code:?}"));
         }
     });
