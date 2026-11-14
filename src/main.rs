@@ -19,6 +19,7 @@ mod mesh;
 mod mesh_ply;
 mod ply_writer;
 mod reconstruction;
+mod server;
 mod simplify;
 mod tsdf;
 mod video;
@@ -41,12 +42,20 @@ use kornia_image::Image;
 struct Args {
     /// path to the input video file
     #[argh(positional)]
-    video: PathBuf,
+    video: Option<PathBuf>,
 
     /// path to the output mesh PLY (sparse/dense clouds are written beside it
     /// as <stem>_sparse.ply and <stem>_cloud.ply)
-    #[argh(positional)]
+    #[argh(option, default = "PathBuf::from(\"mesh.ply\")")]
     output: PathBuf,
+
+    /// launch the local web UI instead of the CLI pipeline
+    #[argh(switch)]
+    serve: bool,
+
+    /// web UI port
+    #[argh(option, default = "8080")]
+    port: u16,
 
     /// feature detector: "orb" or "sift"
     #[argh(option, default = "features::DetectorKind::Orb")]
@@ -54,19 +63,19 @@ struct Args {
 
     /// focal length X in pixels
     #[argh(option)]
-    fx: f64,
+    fx: Option<f64>,
 
     /// focal length Y in pixels
     #[argh(option)]
-    fy: f64,
+    fy: Option<f64>,
 
     /// principal point X in pixels
     #[argh(option)]
-    cx: f64,
+    cx: Option<f64>,
 
     /// principal point Y in pixels
     #[argh(option)]
-    cy: f64,
+    cy: Option<f64>,
 
     /// max features per frame
     #[argh(option, default = "2000")]
@@ -227,6 +236,14 @@ struct Args {
     /// translate the outputs so their centre is the world origin
     #[argh(switch)]
     recenter: bool,
+
+    /// drop triangles whose longest/shortest edge ratio exceeds this (0 = off)
+    #[argh(option, default = "0.0")]
+    needle_aspect: f64,
+
+    /// bilateral (feature-preserving) smoothing iterations after Taubin
+    #[argh(option, default = "2")]
+    bilateral_iterations: usize,
 }
 
 /// Validate CLI values that must be positive.
@@ -274,6 +291,19 @@ fn build_sprt_config(
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Args = argh::from_env();
 
+    if args.serve {
+        return server::serve(args.port);
+    }
+    let video_path = args
+        .video
+        .clone()
+        .ok_or("missing input video (or pass --serve for the web UI)")?;
+    let output_path = args.output.clone();
+    let fx = args.fx.ok_or("missing --fx")?;
+    let fy = args.fy.ok_or("missing --fy")?;
+    let cx = args.cx.ok_or("missing --cx")?;
+    let cy = args.cy.ok_or("missing --cy")?;
+
     // Configure the rayon thread pool (0 = auto-detect).
     features::configure_thread_pool(args.threads)?;
 
@@ -287,9 +317,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map_err(|e| -> Box<dyn Error> { e.into() })?;
 
     // 1. Decode frames.
-    eprintln!("[1/9] reading video: {}", args.video.display());
+    eprintln!("[1/9] reading video: {}", video_path.display());
     let t = Instant::now();
-    let (rgb_frames, gray_frames) = video::read_frames(&args.video, args.frame_step)?;
+    let (rgb_frames, gray_frames) = video::read_frames(&video_path, args.frame_step)?;
     let n_frames = gray_frames.len();
     let (frame_w, frame_h) = rgb_frames
         .first()
@@ -450,16 +480,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         sprt,
         refine_intrinsics: args.refine_intrinsics.then_some(true),
     };
-    let reconstruction = reconstruction::run_sfm(
-        &tracks,
-        args.fx,
-        args.fy,
-        args.cx,
-        args.cy,
-        n_frames,
-        Some(progress),
-        overrides,
-    )?;
+    let reconstruction =
+        reconstruction::run_sfm(&tracks, fx, fy, cx, cy, n_frames, Some(progress), overrides)?;
     let registered = reconstruction.views.iter().filter(|v| v.is_some()).count();
     eprintln!(
         "[5/9] reconstructed {} points across {} registered views (scale: {:?}, rmse {:.3} px) in {:.1}s",
@@ -480,16 +502,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         eprintln!(
             "[5/9] refined intrinsics: gamma {gamma:.4} (fx ~ {:.1} px), k1 {k1:.4}, k2 {k2:.4}, \
              p1 {p1:.4}, p2 {p2:.4}",
-            args.fx / gamma
+            fx / gamma
         );
     }
 
     // 6. Export the sparse cloud, then continue to the dense stages.
     let vertices = ply_writer::build_vertices(&reconstruction, &observation_colors);
     let sparse_path = if args.sparse_only {
-        args.output.clone()
+        output_path.clone()
     } else {
-        sibling_path(&args.output, "_sparse")
+        sibling_path(&output_path, "_sparse")
     };
     let t = Instant::now();
     ply_writer::write_ply(&sparse_path, &vertices)?;
@@ -509,14 +531,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         args.dense_scale, args.dense_planes, args.dense_neighbors
     );
     let t = Instant::now();
-    let cameras = dense_cameras(
-        &reconstruction,
-        args.fx,
-        args.fy,
-        args.cx,
-        args.cy,
-        n_frames,
-    );
+    let cameras = dense_cameras(&reconstruction, fx, fy, cx, cy, n_frames);
     let mut dense_cfg = dense::DenseConfig {
         scale: args.dense_scale,
         planes: args.dense_planes,
@@ -555,8 +570,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             0.40
         };
         dense_cfg.planes = if low { 128 } else { 96 };
+        // NOTE: requiring two agreeing neighbours (`--lr-required 2`) improves
+        // depth accuracy but collapses coverage on these captures (measured:
+        // lip balm 2.5 k vs 18 k faces), so the default stays at 1.
         eprintln!(
-            "[auto] texture score {score:.4} ({}) -> cost {method:?}, window {}, ncc-min {:.2}, planes {}",
+            "[auto] texture score {score:.4} ({}) -> cost {method:?}, window {}, ncc-min {:.2}, planes {}, lr-required {}",
             if low {
                 "low"
             } else if medium {
@@ -566,7 +584,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             },
             dense_cfg.window,
             dense_cfg.ncc_min,
-            dense_cfg.planes
+            dense_cfg.planes,
+            dense_cfg.lr_required
         );
     }
     let maps = dense::estimate_depth_maps(&reconstruction, &cameras, &gray_frames, &dense_cfg)?;
@@ -714,6 +733,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .into(),
         );
     }
+    if args.needle_aspect > 0.0 {
+        let before = mesh.face_count();
+        mesh = mesh::remove_needle_triangles(&mesh, args.needle_aspect);
+        eprintln!(
+            "  removed needle triangles: {before} -> {} faces",
+            mesh.face_count()
+        );
+    }
     if min_component_faces > 0 {
         mesh = mesh.remove_small_components(min_component_faces);
         eprintln!(
@@ -731,6 +758,28 @@ fn main() -> Result<(), Box<dyn Error>> {
             t.elapsed().as_secs_f64(),
             mesh.is_closed(),
             mesh.euler_characteristic()
+        );
+    }
+    if args.bilateral_iterations > 0 && !mesh.positions.is_empty() {
+        // Sigmas scale with the mean edge length so the filter transfers
+        // between captures of different sizes.
+        let mean_edge = mesh
+            .faces
+            .iter()
+            .map(|f| {
+                let [a, b, c] = [
+                    mesh.positions[f[0] as usize],
+                    mesh.positions[f[1] as usize],
+                    mesh.positions[f[2] as usize],
+                ];
+                ((b - a).length() + (c - b).length() + (a - c).length()) / 3.0
+            })
+            .sum::<f64>()
+            / mesh.face_count().max(1) as f64;
+        mesh = mesh::bilateral_smooth(&mesh, args.bilateral_iterations, 2.0 * mean_edge, mean_edge);
+        eprintln!(
+            "  bilateral smoothing: {} iterations (mean edge {:.3})",
+            args.bilateral_iterations, mean_edge
         );
     }
     if target_faces > 0 && mesh.face_count() > target_faces {
@@ -760,7 +809,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         Vec3F64::ZERO
     };
-    mesh_ply::write_mesh_ply(&args.output, &mesh, &normals, &colors)?;
+    mesh_ply::write_mesh_ply(&output_path, &mesh, &normals, &colors)?;
     eprintln!(
         "[9/9] wrote mesh ({} vertices, {} faces, patches={}, euler={}, closed={}) to {} in {:.1}s",
         mesh.vertex_count(),
@@ -768,7 +817,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         mesh.connected_components(),
         mesh.euler_characteristic(),
         mesh.is_closed(),
-        args.output.display(),
+        output_path.display(),
         t.elapsed().as_secs_f64()
     );
 
@@ -784,7 +833,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             normal: volume.gradient(Vec3F64::new(p[0], p[1], p[2])).to_array(),
         })
         .collect();
-    let cloud_path = sibling_path(&args.output, "_cloud");
+    let cloud_path = sibling_path(&output_path, "_cloud");
     ply_writer::write_ply(&cloud_path, &cloud_vertices)?;
     eprintln!(
         "[9/9] wrote {} dense points to {}",
@@ -805,7 +854,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             normal: volume.gradient(Vec3F64::new(p[0], p[1], p[2])).to_array(),
         })
         .collect();
-    let oriented_path = sibling_path(&args.output, "_oriented");
+    let oriented_path = sibling_path(&output_path, "_oriented");
     ply_writer::write_ply(&oriented_path, &oriented_vertices)?;
     eprintln!(
         "[9/9] wrote {} oriented points to {} (Poisson input)",

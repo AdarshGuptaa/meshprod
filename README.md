@@ -77,12 +77,27 @@ python3 -m venv ~/Dev/tools/venv-o3d
 | Registered views | 22 / 63 |
 | Sparse points / RMSE | 1,175 / 2.086 px |
 | Dense depth vs sparse depth | median 4.8 % error |
-| Raw mesh | 109,933 faces |
-| Final mesh | 20,000 faces, 36 patches, ~60 s CPU |
+| Raw mesh | 101,378 faces |
+| Final mesh | 86,971 faces, 33 patches, Euler −97 |
+| Depth accuracy | median 4.0 %, p90 29.4 % vs sparse points |
 | Determinism | byte-identical reruns |
 
 The object is a polished Swiss knife; its specular blade is the main reason the
 mesh is open and split into patches. See the TAI report for the failure modes.
+
+### Accuracy pass (measured on the three captures)
+
+| Capture | Depth median / p90 | Patches | Euler |
+|---|---|---|---|
+| `swiss_knife` (specular) | 4.8 → **4.0 %** / 44.8 → **29.4 %** | 34 → 33 | −104 → **−97** |
+| `lip_balm` 18–27 s (white) | 19.0 → **14.8 %** / 77 → 79 % | 41 | −196 |
+| `keyboard` 15–25 s (textured) | 6.8 → **4.5 %** / 55.3 → **52.8 %** | 2 → 4 | −36 → **−9** |
+
+Changes behind it: parabolic **sub-pixel WTA**, **8-path SGM**, depth **speckle
+filter**, **bilateral mesh smoothing** (feature-preserving), and optional
+**needle-triangle removal** (off by default — it opens many edges on noisy
+clouds). `--lr-required 2` improves accuracy further but collapses coverage on
+these captures, so it stays opt-in.
 
 ## Pipeline (short)
 
@@ -123,6 +138,9 @@ mesh is open and split into patches. See the TAI report for the failure modes.
 | `--auto-config` | derive cost/window/NCC/planes and mesh budget from frame texture |
 | `--auto-crop` | keep only the largest 26-connected voxel cluster |
 | `--recenter` | translate outputs so their centre is the origin |
+| `--serve` / `--port` | local web UI (default port 8080) |
+| `--needle-aspect` | drop long/thin triangles above this edge ratio (0 = off) |
+| `--bilateral-iterations` | feature-preserving smoothing after Taubin |
 | `--voxel-resolution` / `--trunc-voxels` | TSDF resolution and band width |
 | `--lr-required` | neighbours that must agree on a depth (default 1) |
 | `--volume-smoothing` | TSDF box-filter iterations before meshing (default 2) |
@@ -147,6 +165,8 @@ src/tsdf.rs           signed-distance fusion + trilinear sampling
 src/mesh.rs           marching tetrahedra, normals, colours, patch cleanup
 src/simplify.rs       quadric-error-metric edge collapse
 src/mesh_ply.rs       binary mesh PLY writer
+src/server.rs         local web UI backend (axum) for --serve
+web/                  bone-white / army-blue UI (vanilla JS + vendored three.js)
 src/ply_writer.rs     binary point-cloud PLY writer
 docs/pipeline.md      how every stage works (start here)
 docs/tai/             EU ALTAI trustworthiness assessment
@@ -172,6 +192,25 @@ kornia-image   = { path = "../kornia-rs-semproj/crates/kornia-image" }
 kornia-imgproc = { path = "../kornia-rs-semproj/crates/kornia-imgproc" }
 kornia-io      = { path = "../kornia-rs-semproj/crates/kornia-io" }
 ```
+
+## Deploying on Linux / Windows
+
+The CPU pipeline is pure Rust. The only system dependency is **GStreamer 1.20+**
+(and its dev files to build). Ready-made setup:
+
+```bash
+# Linux (Debian/Ubuntu; adapt for dnf)
+scripts/setup_linux.sh
+
+# Windows (elevated PowerShell; installs GStreamer devel + runtime MSIs)
+powershell -ExecutionPolicy Bypass -File scripts\setup_windows.ps1
+```
+
+CI runs fmt, clippy, tests and a release build on **ubuntu-latest and
+windows-latest** (`.github/workflows/ci.yml`), so portability is verified, not
+assumed. Determinism is guaranteed **per platform/architecture**: repeated runs
+on the same machine are byte-identical, but kornia dispatches different SIMD
+kernels across architectures and the last bits may differ.
 
 ## License
 

@@ -414,6 +414,168 @@ pub fn vertex_colors(
         .collect()
 }
 
+/// Drop needle triangles (longest edge / shortest edge above `max_aspect`).
+///
+/// Marching tetrahedra produces thin slivers at grazing surfaces; they render as
+/// spikes and make QEM collapse badly. Removing them before smoothing keeps the
+/// mesh visually clean.
+pub fn remove_needle_triangles(mesh: &Mesh, max_aspect: f64) -> Mesh {
+    if max_aspect <= 0.0 {
+        return Mesh {
+            positions: mesh.positions.clone(),
+            faces: mesh.faces.clone(),
+        };
+    }
+    let mut used = vec![false; mesh.positions.len()];
+    let mut faces = Vec::with_capacity(mesh.faces.len());
+    for f in &mesh.faces {
+        let [a, b, c] = [
+            mesh.positions[f[0] as usize],
+            mesh.positions[f[1] as usize],
+            mesh.positions[f[2] as usize],
+        ];
+        let mut edges = [(b - a).length(), (c - b).length(), (a - c).length()];
+        edges.sort_by(f64::total_cmp);
+        if edges[0] < 1e-12 || edges[2] / edges[0] > max_aspect {
+            continue;
+        }
+        faces.push(*f);
+        for &v in f {
+            used[v as usize] = true;
+        }
+    }
+    let mut remap = vec![u32::MAX; mesh.positions.len()];
+    let mut positions = Vec::new();
+    for (v, &u) in used.iter().enumerate() {
+        if u {
+            remap[v] = positions.len() as u32;
+            positions.push(mesh.positions[v]);
+        }
+    }
+    for f in &mut faces {
+        *f = [
+            remap[f[0] as usize],
+            remap[f[1] as usize],
+            remap[f[2] as usize],
+        ];
+    }
+    Mesh { positions, faces }
+}
+
+/// Area-weighted vertex normals.
+pub fn vertex_normals_from_faces(mesh: &Mesh) -> Vec<Vec3F64> {
+    let mut normals = vec![Vec3F64::ZERO; mesh.positions.len()];
+    for f in &mesh.faces {
+        let [a, b, c] = [
+            mesh.positions[f[0] as usize],
+            mesh.positions[f[1] as usize],
+            mesh.positions[f[2] as usize],
+        ];
+        let n = (b - a).cross(c - a);
+        for &v in f {
+            normals[v as usize] += n;
+        }
+    }
+    normals
+        .into_iter()
+        .map(|n| {
+            let len = n.length();
+            if len > 1e-12 {
+                n / len
+            } else {
+                Vec3F64::new(0.0, 0.0, 1.0)
+            }
+        })
+        .collect()
+}
+
+/// Bilateral mesh smoothing (Fleishman et al. 2003).
+///
+/// Neighbour offsets are projected onto the vertex normal and weighted by both
+/// spatial distance and normal-direction difference, so flat regions smooth
+/// while creases (keyboard edges, blade bevels) stay sharp. Boundary vertices
+/// are pinned. `sigma_*` are in world units; pass multiples of the mean edge
+/// length (e.g. 2x spatial, 1x range).
+pub fn bilateral_smooth(
+    mesh: &Mesh,
+    iterations: usize,
+    sigma_spatial: f64,
+    sigma_range: f64,
+) -> Mesh {
+    if iterations == 0 || sigma_spatial <= 0.0 || sigma_range <= 0.0 {
+        return Mesh {
+            positions: mesh.positions.clone(),
+            faces: mesh.faces.clone(),
+        };
+    }
+    let n = mesh.positions.len();
+    let mut neighbours: Vec<Vec<u32>> = vec![Vec::new(); n];
+    let mut edge_use: HashMap<(u32, u32), u32> = HashMap::new();
+    for f in &mesh.faces {
+        for (u, v) in [(f[0], f[1]), (f[1], f[2]), (f[2], f[0])] {
+            if u == v {
+                continue;
+            }
+            neighbours[u as usize].push(v);
+            neighbours[v as usize].push(u);
+            let key = if u < v { (u, v) } else { (v, u) };
+            *edge_use.entry(key).or_default() += 1;
+        }
+    }
+    for list in &mut neighbours {
+        list.sort_unstable();
+        list.dedup();
+    }
+    let mut pinned = vec![false; n];
+    for ((u, v), count) in &edge_use {
+        if *count != 2 {
+            pinned[*u as usize] = true;
+            pinned[*v as usize] = true;
+        }
+    }
+
+    let mut positions = mesh.positions.clone();
+    let inv_s = 0.5 / (sigma_spatial * sigma_spatial);
+    let inv_r = 0.5 / (sigma_range * sigma_range);
+    for _ in 0..iterations {
+        let normals = vertex_normals_from_faces(&Mesh {
+            positions: positions.clone(),
+            faces: mesh.faces.clone(),
+        });
+        let displacement: Vec<Vec3F64> = (0..n)
+            .map(|v| {
+                if pinned[v] || neighbours[v].is_empty() {
+                    return Vec3F64::ZERO;
+                }
+                let p = positions[v];
+                let normal = normals[v];
+                let mut sum = 0.0f64;
+                let mut weight_sum = 0.0f64;
+                for &u in &neighbours[v] {
+                    let d = positions[u as usize] - p;
+                    let dist2 = d.dot(d);
+                    let t = d.dot(normal);
+                    let w = (-dist2 * inv_s).exp() * (-t * t * inv_r).exp();
+                    sum += w * t;
+                    weight_sum += w;
+                }
+                if weight_sum > 1e-12 {
+                    normal * (0.5 * sum / weight_sum)
+                } else {
+                    Vec3F64::ZERO
+                }
+            })
+            .collect();
+        for (v, d) in displacement.into_iter().enumerate() {
+            positions[v] += d;
+        }
+    }
+    Mesh {
+        positions,
+        faces: mesh.faces.clone(),
+    }
+}
+
 /// Taubin smoothing (Taubin 1995).
 ///
 /// Two alternating Laplacian passes — `lambda > 0` smooths, `mu < 0` cancels
@@ -643,6 +805,62 @@ mod tests {
         );
         assert!(smoothed.is_closed(), "topology must be preserved");
         assert_eq!(smoothed.face_count(), noisy.face_count());
+    }
+
+    #[test]
+    fn needle_triangles_are_removed() {
+        let mesh = Mesh {
+            positions: vec![
+                Vec3F64::new(0.0, 0.0, 0.0),
+                Vec3F64::new(1.0, 0.0, 0.0),
+                Vec3F64::new(0.0, 1.0, 0.0),
+                Vec3F64::new(0.0, 0.0, 0.0),
+                Vec3F64::new(100.0, 0.0, 0.0),
+                Vec3F64::new(0.0, 0.01, 0.0),
+            ],
+            faces: vec![[0, 1, 2], [3, 4, 5]],
+        };
+        let cleaned = remove_needle_triangles(&mesh, 10.0);
+        assert_eq!(cleaned.face_count(), 1, "the needle must be dropped");
+        assert_eq!(cleaned.vertex_count(), 3);
+    }
+
+    #[test]
+    fn bilateral_smoothing_reduces_noise_without_shrinking() {
+        let vol = sphere_volume(40, 0.1, 1.23, 0.4);
+        let mesh = marching_tetrahedra(&vol);
+        let noisy = Mesh {
+            positions: mesh
+                .positions
+                .iter()
+                .enumerate()
+                .map(|(i, p)| *p * (1.0 + 0.04 * (i as f64 * 0.7).sin()))
+                .collect(),
+            faces: mesh.faces.clone(),
+        };
+        let radius = |m: &Mesh| -> (f64, f64) {
+            let n = m.positions.len() as f64;
+            let mean = m.positions.iter().map(|p| p.length()).sum::<f64>() / n;
+            let var = m
+                .positions
+                .iter()
+                .map(|p| (p.length() - mean).powi(2))
+                .sum::<f64>()
+                / n;
+            (mean, var.sqrt())
+        };
+        let (mean_before, std_before) = radius(&noisy);
+        let smoothed = bilateral_smooth(&noisy, 2, 0.25, 0.1);
+        let (mean_after, std_after) = radius(&smoothed);
+        assert!(
+            std_after < 0.8 * std_before,
+            "noise should drop: {std_before:.4} -> {std_after:.4}"
+        );
+        assert!(
+            (mean_after - mean_before).abs() < 0.02 * mean_before,
+            "no shrinkage: {mean_before:.4} -> {mean_after:.4}"
+        );
+        assert!(smoothed.is_closed());
     }
 
     #[test]

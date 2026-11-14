@@ -270,6 +270,22 @@ fn depth_range(points: &[kornia_calib::Point], w2c: &Pose3d, centre: Vec3F64) ->
     (0.5 * d, 1.5 * d)
 }
 
+/// Parabolic sub-pixel refinement of a discrete winner.
+///
+/// Given the cost/score at the neighbouring planes, returns the vertex offset
+/// of the parabola through `(prev, best, next)` in plane units, clamped to
+/// ±0.5. Works for both maximised scores (NCC) and minimised costs.
+fn subpixel_offset(prev: f32, best: f32, next: f32) -> f64 {
+    if !prev.is_finite() || !next.is_finite() {
+        return 0.0;
+    }
+    let denom = prev + next - 2.0 * best;
+    if denom.abs() < 1e-9 {
+        return 0.0;
+    }
+    (((prev - next) / (2.0 * denom)) as f64).clamp(-0.5, 0.5)
+}
+
 /// Estimate one view's depth map.
 fn sweep_view(
     view: usize,
@@ -350,6 +366,10 @@ fn sweep_view(
 
                 let mut best_ncc = f32::NEG_INFINITY;
                 let mut best_rho = 0.0f64;
+                let mut best_plane = 0usize;
+                let mut best_prev = f32::NEG_INFINITY;
+                let mut best_next = f32::NEG_INFINITY;
+                let mut prev_score = f32::NEG_INFINITY;
 
                 for plane in 0..cfg.planes {
                     let frac = if cfg.planes > 1 {
@@ -399,10 +419,21 @@ fn sweep_view(
                     if score > best_ncc {
                         best_ncc = score;
                         best_rho = rho;
+                        best_plane = plane;
+                        best_prev = prev_score;
+                        best_next = f32::NEG_INFINITY;
+                    } else if plane == best_plane + 1 {
+                        best_next = score;
                     }
+                    prev_score = score;
                 }
 
                 if best_ncc >= cfg.ncc_min && best_rho > 0.0 {
+                    let delta = subpixel_offset(best_prev, best_ncc, best_next);
+                    if cfg.planes > 1 {
+                        let step = (rho_hi - rho_lo) / (cfg.planes - 1) as f64;
+                        best_rho += delta * step;
+                    }
                     *out = best_rho as f32;
                     *conf = best_ncc;
                 }
@@ -448,13 +479,15 @@ fn sweep_view_census(
         ref_pose.translation,
     );
     let planes = cfg.planes.max(2);
+    let rho_lo = 1.0 / d_max.max(1e-9);
+    let rho_hi = 1.0 / d_min.max(1e-9);
     let rho_at = |plane: usize| {
         let f = if planes > 1 {
             plane as f64 / (planes - 1) as f64
         } else {
             0.0
         };
-        1.0 / (d_max - (d_max - d_min) * f).max(1e-9)
+        rho_lo + (rho_hi - rho_lo) * f
     };
 
     let rel: Vec<(usize, Mat3F64, Vec3F64)> = neighbours
@@ -546,7 +579,22 @@ fn sweep_view_census(
                     // Validate on the RAW cost: the aggregated one is not in [0, 1].
                     let raw = cost[base + best_plane];
                     if raw <= cfg.census_max_cost {
-                        out_row[col] = rho_at(best_plane) as f32;
+                        let prev = if best_plane > 0 {
+                            agg[base + best_plane - 1]
+                        } else {
+                            f32::INFINITY
+                        };
+                        let next = if best_plane + 1 < planes {
+                            agg[base + best_plane + 1]
+                        } else {
+                            f32::INFINITY
+                        };
+                        let delta = subpixel_offset(prev, best, next);
+                        let mut rho = rho_at(best_plane);
+                        if planes > 1 {
+                            rho += delta * (rho_hi - rho_lo) / (planes - 1) as f64;
+                        }
+                        out_row[col] = rho as f32;
                         conf_row[col] = 1.0 - raw;
                     }
                 }
@@ -562,16 +610,30 @@ fn sweep_view_census(
                     let sx = col as f64 / scale;
                     let mut best = f32::INFINITY;
                     let mut best_rho = 0.0f64;
+                    let mut best_plane = 0usize;
+                    let mut best_prev = f32::INFINITY;
+                    let mut best_next = f32::INFINITY;
+                    let mut prev_cost = f32::INFINITY;
                     for plane in 0..planes {
                         let rho = rho_at(plane);
                         if let Some(c) = pixel_cost(sx, sy, rho) {
                             if c < best {
                                 best = c;
                                 best_rho = rho;
+                                best_plane = plane;
+                                best_prev = prev_cost;
+                                best_next = f32::INFINITY;
+                            } else if plane == best_plane + 1 {
+                                best_next = c;
                             }
+                            prev_cost = c;
                         }
                     }
                     if best <= cfg.census_max_cost && best_rho > 0.0 {
+                        let delta = subpixel_offset(best_prev, best, best_next);
+                        if planes > 1 {
+                            best_rho += delta * (rho_hi - rho_lo) / (planes - 1) as f64;
+                        }
                         out_row[col] = best_rho as f32;
                         conf_row[col] = 1.0 - best;
                     }
@@ -745,12 +807,59 @@ pub fn estimate_depth_maps(
         });
     }
 
+    // Remove isolated depth values that survive the consistency check.
+    for map in maps.iter_mut().flatten() {
+        remove_depth_speckles(map, 2, 0.05, 3);
+    }
+
     // Surface normals from the depth-image gradients, for view-angle weighting.
     for map in maps.iter_mut().flatten() {
         compute_depth_normals(map, &cameras[map.view]);
     }
 
     Ok(maps)
+}
+
+/// Remove depth pixels that disagree with the median of their neighbourhood.
+///
+/// Photogrammetric depth maps contain isolated spikes from mismatched windows.
+/// A median test (rather than a mean) preserves depth discontinuities while
+/// deleting the speckles that become needles in the mesh. Pixels with fewer
+/// than `min_valid` valid neighbours are dropped.
+pub fn remove_depth_speckles(map: &mut DepthMap, radius: usize, rel_tol: f64, min_valid: usize) {
+    let (w, h) = (map.width, map.height);
+    let original = map.inv_depth.clone();
+    let mut window: Vec<f32> = Vec::with_capacity((2 * radius + 1) * (2 * radius + 1));
+    for y in 0..h {
+        for x in 0..w {
+            let rho = original[y * w + x];
+            if rho <= 0.0 {
+                continue;
+            }
+            window.clear();
+            for dy in -(radius as isize)..=radius as isize {
+                for dx in -(radius as isize)..=radius as isize {
+                    let (nx, ny) = (x as isize + dx, y as isize + dy);
+                    if nx < 0 || ny < 0 || nx >= w as isize || ny >= h as isize {
+                        continue;
+                    }
+                    let v = original[ny as usize * w + nx as usize];
+                    if v > 0.0 {
+                        window.push(v);
+                    }
+                }
+            }
+            if window.len() < min_valid {
+                map.inv_depth[y * w + x] = 0.0;
+                continue;
+            }
+            window.sort_by(f32::total_cmp);
+            let median = window[window.len() / 2];
+            if (rho - median).abs() as f64 > rel_tol * median as f64 {
+                map.inv_depth[y * w + x] = 0.0;
+            }
+        }
+    }
 }
 
 /// Per-pixel surface normals from central differences of the depth image.
@@ -1191,6 +1300,35 @@ mod tests {
         assert_eq!(removed, 8, "the small far cluster must be dropped");
         assert_eq!(cloud.points.len(), 27);
         assert!(cloud.points.iter().all(|p| p[0] < 1.0));
+    }
+
+    #[test]
+    fn speckle_filter_removes_the_outlier_and_keeps_the_ramp() {
+        let (width, height) = (16usize, 16usize);
+        let mut inv_depth = vec![0.0f32; width * height];
+        for y in 0..height {
+            for x in 0..width {
+                inv_depth[y * width + x] = 0.5;
+            }
+        }
+        inv_depth[8 * width + 8] = 2.0; // isolated spike
+        let mut map = DepthMap {
+            view: 0,
+            width,
+            height,
+            scale: 1.0,
+            inv_depth: inv_depth.clone(),
+            confidence: vec![1.0; width * height],
+            normals: vec![[0.0; 3]; width * height],
+            neighbors: Vec::new(),
+        };
+        remove_depth_speckles(&mut map, 2, 0.05, 3);
+        assert_eq!(map.inv_depth[8 * width + 8], 0.0, "outlier invalidated");
+        assert_eq!(
+            map.inv_depth[4 * width + 4],
+            0.5,
+            "consistent ramp survives"
+        );
     }
 
     #[test]

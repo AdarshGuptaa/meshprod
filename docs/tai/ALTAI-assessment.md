@@ -131,6 +131,21 @@ usable seconds.
 fragmented the mesh (6 tiny islands). It is opt-in and documented as needing a
 clean cloud (after plane removal) or a segmented object.
 
+### 2.1e Accuracy pass (Path 1.5)
+
+Sub-pixel WTA, 8-path SGM, a depth speckle filter and bilateral mesh smoothing:
+
+| Capture | Depth median / p90 | Patches | Euler |
+|---|---|---|---|
+| knife | 4.8 → **4.0 %** / 44.8 → **29.4 %** | 34 → 33 | −104 → **−97** |
+| lip balm | 19.0 → **14.8 %** / 77 → 79 % | 41 | −196 |
+| keyboard | 6.8 → **4.5 %** / 55.3 → **52.8 %** | 2 → 4 | −36 → **−9** |
+
+`--lr-required 2` was measured but left opt-in: it improves depth accuracy and
+halves coverage (lip balm 19 k → 2.5 k faces). Needle-triangle removal is also
+opt-in: at aspect 8 it repaired slivers but opened ~7 k edges (Euler −97 →
+−7246), so the defaults keep Taubin + bilateral as the de-spiking path.
+
 ### 2.2 Repeatability (determinism)
 
 Two independent full runs produced **byte-identical** outputs:

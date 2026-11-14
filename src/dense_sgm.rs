@@ -114,58 +114,101 @@ pub fn sgm_aggregate(
 ) {
     debug_assert_eq!(cost.len(), width * height * planes);
     out.copy_from_slice(cost);
-    let mut buf = vec![0.0f32; planes];
+    // Cardinals first, then diagonals, so small `paths` values still smooth
+    // along both image axes.
+    let dirs: [(isize, isize); 8] = [
+        (1, 0),
+        (-1, 0),
+        (0, 1),
+        (0, -1),
+        (1, 1),
+        (-1, 1),
+        (-1, -1),
+        (1, -1),
+    ];
+    let zeros = vec![0.0f32; planes];
+    let mut row_a = vec![0.0f32; width * planes];
+    let mut row_b = vec![0.0f32; width * planes];
 
-    for dir in 0..paths.min(4) {
-        match dir {
-            0 => {
-                for y in 0..height {
-                    buf.fill(0.0);
-                    for x in 0..width {
-                        accumulate(cost, width, planes, x, y, p1, p2, &mut buf, out);
-                    }
+    for &(dx, dy) in dirs.iter().take(paths.clamp(1, 8)) {
+        if dy == 0 {
+            // Horizontal: one previous-pixel buffer per row.
+            let mut prev = vec![0.0f32; planes];
+            let mut cur = vec![0.0f32; planes];
+            for y in 0..height {
+                prev.fill(0.0);
+                let xs: Box<dyn Iterator<Item = usize>> = if dx > 0 {
+                    Box::new(0..width)
+                } else {
+                    Box::new((0..width).rev())
+                };
+                for x in xs {
+                    step_pixel(cost, width, planes, x, y, &prev, p1, p2, &mut cur, out);
+                    std::mem::swap(&mut prev, &mut cur);
                 }
             }
-            1 => {
-                for x in 0..width {
-                    buf.fill(0.0);
-                    for y in 0..height {
-                        accumulate(cost, width, planes, x, y, p1, p2, &mut buf, out);
+        } else {
+            // Vertical/diagonal: keep the previous row of L values.
+            row_a.fill(0.0);
+            let ys: Box<dyn Iterator<Item = usize>> = if dy > 0 {
+                Box::new(0..height)
+            } else {
+                Box::new((0..height).rev())
+            };
+            for y in ys {
+                row_b.fill(0.0);
+                let xs: Box<dyn Iterator<Item = usize>> = if dx >= 0 {
+                    Box::new(0..width)
+                } else {
+                    Box::new((0..width).rev())
+                };
+                for x in xs {
+                    let px = x as isize - dx;
+                    let prev_slice: &[f32] = if px >= 0 && (px as usize) < width {
+                        &row_a[px as usize * planes..][..planes]
+                    } else {
+                        &zeros
+                    };
+                    let base = (y * width + x) * planes;
+                    let mut min_prev = f32::INFINITY;
+                    for &l in prev_slice.iter() {
+                        if l < min_prev {
+                            min_prev = l;
+                        }
+                    }
+                    let jump = min_prev + p2;
+                    for d in 0..planes {
+                        let mut m = prev_slice[d];
+                        if d > 0 {
+                            m = m.min(prev_slice[d - 1] + p1);
+                        }
+                        if d + 1 < planes {
+                            m = m.min(prev_slice[d + 1] + p1);
+                        }
+                        let l = cost[base + d] + m.min(jump) - min_prev;
+                        row_b[x * planes + d] = l;
+                        out[base + d] += l;
                     }
                 }
-            }
-            2 => {
-                for y in 0..height {
-                    buf.fill(0.0);
-                    for x in (0..width).rev() {
-                        accumulate(cost, width, planes, x, y, p1, p2, &mut buf, out);
-                    }
-                }
-            }
-            _ => {
-                for x in 0..width {
-                    buf.fill(0.0);
-                    for y in (0..height).rev() {
-                        accumulate(cost, width, planes, x, y, p1, p2, &mut buf, out);
-                    }
-                }
+                std::mem::swap(&mut row_a, &mut row_b);
             }
         }
     }
 }
 
-/// One SGM step: smooth the cost of pixel `(x, y)` along the current path.
+/// One horizontal SGM step, writing the path cost at `(x, y)`.
 #[inline]
 #[allow(clippy::too_many_arguments)]
-fn accumulate(
+fn step_pixel(
     cost: &[f32],
     width: usize,
     planes: usize,
     x: usize,
     y: usize,
+    prev: &[f32],
     p1: f32,
     p2: f32,
-    prev: &mut [f32],
+    cur: &mut [f32],
     out: &mut [f32],
 ) {
     let base = (y * width + x) * planes;
@@ -185,7 +228,7 @@ fn accumulate(
             m = m.min(prev[d + 1] + p1);
         }
         let l = cost[base + d] + m.min(jump) - min_prev;
-        prev[d] = l;
+        cur[d] = l;
         out[base + d] += l;
     }
 }

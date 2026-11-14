@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>meshprod — monocular video to mesh</title>
+  <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.js" } }
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo"></span>
+      <div>
+        <h1>meshprod</h1>
+        <p>monocular video → simplified coloured mesh</p>
+      </div>
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-tab="studio">Studio</button>
+      <button class="tab" data-tab="trust">Trust</button>
+      <button class="tab" data-tab="credits">Credits</button>
+    </nav>
+    <div class="status-pill" id="status-pill">idle</div>
+  </header>
+
+  <main>
+    <section class="tab-panel active" id="tab-studio">
+      <aside class="panel config">
+        <div class="panel-head">
+          <h2>Capture &amp; config</h2>
+          <div class="presets">
+            <button data-preset="fast">Fast</button>
+            <button data-preset="balanced" class="active">Balanced</button>
+            <button data-preset="quality">Quality</button>
+            <button data-preset="auto">Auto</button>
+          </div>
+        </div>
+
+        <label class="dropzone" id="dropzone">
+          <input type="file" id="video-input" accept="video/*" hidden />
+          <strong id="drop-title">Drop an MP4 here</strong>
+          <span id="drop-sub">or click to choose · processed locally, nothing leaves this machine</span>
+        </label>
+
+        <div class="intrinsics">
+          <label>fx <input type="number" id="fx" value="895" step="0.5" /></label>
+          <label>fy <input type="number" id="fy" value="895" step="0.5" /></label>
+          <label>cx <input type="number" id="cx" value="640" step="0.5" /></label>
+          <label>cy <input type="number" id="cy" value="360" step="0.5" /></label>
+        </div>
+        <p class="hint">fx = f_35mm / 36 × width. For a 1280×720 phone clip, ~895 px.</p>
+
+        <div id="config-groups"></div>
+
+        <button class="primary" id="run-button">Run reconstruction</button>
+        <div class="run-links" id="run-links"></div>
+      </aside>
+
+      <section class="panel view">
+        <div class="viewer" id="viewer">
+          <div class="viewer-empty" id="viewer-empty">
+            <span class="spinner"></span>
+            <p>No mesh yet — run a reconstruction.</p>
+          </div>
+        </div>
+        <div class="viewer-toolbar">
+          <div class="styles" id="styles">
+            <button data-style="colour" class="active">Colour</button>
+            <button data-style="clay">Clay</button>
+            <button data-style="normals">Normals</button>
+            <button data-style="height">Height</button>
+            <button data-style="wireframe">Wireframe</button>
+            <button data-style="xray">X-ray</button>
+          </div>
+          <a class="ghost" id="download-mesh" download>Download PLY</a>
+        </div>
+
+        <div class="stages" id="stages"></div>
+        <pre class="log" id="log"></pre>
+      </section>
+    </section>
+
+    <section class="tab-panel" id="tab-trust">
+      <div class="panel">
+        <h2>Live metrics</h2>
+        <div class="cards" id="metric-cards"></div>
+      </div>
+      <div class="panel">
+        <h2>Comparison across runs</h2>
+        <div class="charts">
+          <div>
+            <h3>Mesh faces</h3>
+            <svg id="chart-faces" viewBox="0 0 420 140"></svg>
+          </div>
+          <div>
+            <h3>Depth error (median %)</h3>
+            <svg id="chart-depth" viewBox="0 0 420 140"></svg>
+          </div>
+        </div>
+        <p class="hint">Seeded with the measured knife / lip-balm / keyboard runs; new UI runs append here.</p>
+      </div>
+      <div class="panel">
+        <h2>EU ALTAI requirements</h2>
+        <div class="altai" id="altai"></div>
+      </div>
+      <div class="panel">
+        <h2>Trust controls</h2>
+        <div class="trust-actions">
+          <span class="badge good">Local processing only</span>
+          <span class="badge good">Deterministic runs (same input + config)</span>
+          <span class="badge warn">Up to scale (no AprilTag anchor)</span>
+          <span class="badge warn">Surface may be open on partial captures</span>
+          <button class="ghost" id="export-config">Export run config (JSON)</button>
+        </div>
+        <pre class="log small" id="config-json"></pre>
+      </div>
+    </section>
+
+    <section class="tab-panel" id="tab-credits">
+      <div class="panel credits">
+        <h2>Credits</h2>
+        <div class="credit-grid">
+          <div>
+            <h3>Author</h3>
+            <p><strong>Adarsh Gupta</strong> — semester project.<br />
+            Institution: <em>[add your university]</em><br />
+            Advisor: <em>[add advisor]</em></p>
+          </div>
+          <div>
+            <h3>Built on</h3>
+            <p>kornia-rs (SfM, calibration, geometry), three.js (viewer), Blender (renders),
+            Open3D (Poisson comparison), GStreamer (video decode).</p>
+          </div>
+          <div>
+            <h3>AI disclosure</h3>
+            <p>Implemented with AI assistance: OpenCode CLI, DeepSeek V4.1 Flash.
+            The author defined the scope, reviewed every change, and owns the design.
+            Every reported number comes from a measured run.</p>
+          </div>
+          <div>
+            <h3>License</h3>
+            <p>MIT. Source: <a href="https://github.com/AdarshGuptaa/meshprod" target="_blank" rel="noreferrer">github.com/AdarshGuptaa/meshprod</a></p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
