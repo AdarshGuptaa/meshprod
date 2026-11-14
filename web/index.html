@@ -25,15 +25,21 @@
     <symbol id="i-gear" viewBox="0 0 24 24"><path d="m19.4 13 .1-1-.1-1 2-1.6-2-3.4-2.4 1a8 8 0 0 0-1.7-1L15 3h-4l-.4 2.6a8 8 0 0 0-1.7 1l-2.4-1-2 3.4L6.5 11l-.1 1 .1 1-2 1.6 2 3.4 2.4-1a8 8 0 0 0 1.7 1L11 21h4l.4-2.6a8 8 0 0 0 1.7-1l2.4 1 2-3.4-2-1.6ZM13 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8Z"/></symbol>
     <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6-1.4-1.4L12.2 12 7.6 7.4 9 6Z"/></symbol>
     <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 2l2.2 6.4L21 10l-5.4 4 1.6 7-5.2-3.6L6.8 21l1.6-7L3 10l6.8-1.6L12 2Z"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="m12 6 7 7-1.4 1.4L13 9.8V20h-2V9.8l-4.6 4.6L5 13l7-7Z"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m12 18-7-7 1.4-1.4L11 14.2V4h2v10.2l4.6-4.6L19 11l-7 7Z"/></symbol>
+    <symbol id="i-left" viewBox="0 0 24 24"><path d="m6 12 7-7 1.4 1.4L9.8 11H20v2H9.8l4.6 4.6L13 19l-7-7Z"/></symbol>
+    <symbol id="i-right" viewBox="0 0 24 24"><path d="m18 12-7 7-1.4-1.4L14.2 13H4v-2h10.2L9.6 6.4 11 5l7 7Z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 11h14v2H5v-2Z"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M12 5a7 7 0 1 1-6.6 9.3l1.9-.6A5 5 0 1 0 12 7v3L7 6l5-4v3Z"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 4h6v2H6v4H4V4Zm10 0h6v6h-2V6h-4V4ZM4 14h2v4h4v2H4v-6Zm16 0v6h-6v-2h4v-4h2Z"/></symbol>
+    <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M12 4a8 8 0 1 1-7.4 5H2.5l2.9-3 2.9 3H6.1A6 6 0 1 0 12 6V4Z"/></symbol>
   </svg>
 
-  <header class="topbar">
+  <header class="hud">
     <div class="brand">
       <span class="logo"><svg class="icon"><use href="#i-cube"/></svg></span>
-      <div>
-        <h1>meshprod</h1>
-        <p>monocular video → measured mesh</p>
-      </div>
+      <div><h1>meshprod</h1><p>monocular video → measured mesh</p></div>
     </div>
     <nav class="tabs" id="tabs">
       <button class="tab active" data-tab="studio"><svg class="icon"><use href="#i-camera"/></svg>Studio</button>
@@ -45,13 +51,11 @@
     <div class="status-pill" id="status-pill">idle</div>
   </header>
 
-  <div class="rule"></div>
-
   <main>
     <section class="tab-panel active" id="tab-studio">
-      <aside class="panel config" id="config-panel">
-        <div class="panel-head">
-          <h2>Capture</h2>
+      <aside class="panel inventory">
+        <div class="inv-head">
+          <h2><svg class="icon"><use href="#i-layers"/></svg>Loadout</h2>
           <div class="presets">
             <button data-preset="fast">Fast</button>
             <button data-preset="balanced" class="active">Balanced</button>
@@ -67,22 +71,14 @@
           <span id="drop-sub">or click to choose · local processing only</span>
         </label>
 
-        <div class="intrinsics">
-          <label>fx <input type="number" id="fx" value="895" step="0.5" /></label>
-          <label>fy <input type="number" id="fy" value="895" step="0.5" /></label>
-          <label>cx <input type="number" id="cx" value="640" step="0.5" /></label>
-          <label>cy <input type="number" id="cy" value="360" step="0.5" /></label>
-        </div>
-        <p class="hint">fx = f<sub>35mm</sub> / 36 × width. About 895 px for 1280×720 phone video.</p>
-
         <div id="config-groups"></div>
 
         <button class="primary" id="run-button"><svg class="icon"><use href="#i-play"/></svg>Run reconstruction</button>
         <div class="run-links" id="run-links"></div>
       </aside>
 
-      <section class="panel view">
-        <div class="viewfinder">
+      <section class="panel viewport">
+        <div class="viewfinder" id="viewfinder">
           <span class="bracket tl"></span><span class="bracket tr"></span>
           <span class="bracket bl"></span><span class="bracket br"></span>
           <span class="reticle"></span>
@@ -102,20 +98,67 @@
             <button data-style="wireframe">Wireframe</button>
             <button data-style="xray">X-ray</button>
           </div>
-          <a class="ghost" id="download-mesh" download><svg class="icon"><use href="#i-download"/></svg>Download PLY</a>
+          <div class="toolbar-right">
+            <button class="ghost" id="view-fullscreen"><svg class="icon"><use href="#i-expand"/></svg>Fullscreen</button>
+            <a class="ghost" id="download-mesh" download><svg class="icon"><use href="#i-download"/></svg>PLY</a>
+          </div>
         </div>
 
         <div class="error-banner" id="error-banner" hidden>
-          <div class="error-head">
-            <span class="badge bad" id="error-code">error</span>
-            <strong id="error-message"></strong>
-          </div>
+          <div class="error-head"><span class="badge bad" id="error-code">error</span><strong id="error-message"></strong></div>
           <ul id="error-hints"></ul>
         </div>
 
         <div class="stages" id="stages"></div>
         <pre class="log" id="log"></pre>
       </section>
+
+      <aside class="rail">
+        <section class="panel inspector">
+          <h2><svg class="icon"><use href="#i-info"/></svg>Inspector</h2>
+          <div id="details"><p class="hint">Hover a slot to inspect it.</p></div>
+        </section>
+        <section class="panel camera-panel">
+          <h2><svg class="icon"><use href="#i-camera"/></svg>Camera</h2>
+          <div class="cam-section">
+            <span class="cam-label">Orbit</span>
+            <div class="cam-pad">
+              <button data-cam="orbit-up" title="Orbit up"><svg class="icon"><use href="#i-up"/></svg></button>
+              <button data-cam="orbit-left" title="Orbit left"><svg class="icon"><use href="#i-left"/></svg></button>
+              <button data-cam="reset" title="Reset view"><svg class="icon"><use href="#i-reset"/></svg></button>
+              <button data-cam="orbit-right" title="Orbit right"><svg class="icon"><use href="#i-right"/></svg></button>
+              <button data-cam="orbit-down" title="Orbit down"><svg class="icon"><use href="#i-down"/></svg></button>
+            </div>
+          </div>
+          <div class="cam-section">
+            <span class="cam-label">Zoom</span>
+            <div class="cam-row">
+              <button data-cam="zoom-in" title="Zoom in"><svg class="icon"><use href="#i-plus"/></svg></button>
+              <button data-cam="zoom-out" title="Zoom out"><svg class="icon"><use href="#i-minus"/></svg></button>
+            </div>
+          </div>
+          <div class="cam-section">
+            <span class="cam-label">Pan</span>
+            <div class="cam-pad">
+              <button data-cam="pan-up" title="Pan up"><svg class="icon"><use href="#i-up"/></svg></button>
+              <button data-cam="pan-left" title="Pan left"><svg class="icon"><use href="#i-left"/></svg></button>
+              <button data-cam="auto" title="Toggle auto-rotate"><svg class="icon"><use href="#i-rotate"/></svg></button>
+              <button data-cam="pan-right" title="Pan right"><svg class="icon"><use href="#i-right"/></svg></button>
+              <button data-cam="pan-down" title="Pan down"><svg class="icon"><use href="#i-down"/></svg></button>
+            </div>
+          </div>
+          <div class="cam-section">
+            <span class="cam-label">View</span>
+            <div class="cam-row">
+              <button data-cam="front">Front</button>
+              <button data-cam="top">Top</button>
+              <button data-cam="side">Side</button>
+              <button data-cam="fit">Fit</button>
+            </div>
+          </div>
+          <p class="hint">drag = orbit · wheel = zoom · right-drag = pan · F = fit</p>
+        </section>
+      </aside>
     </section>
 
     <section class="tab-panel" id="tab-slides">
@@ -133,10 +176,7 @@
     </section>
 
     <section class="tab-panel" id="tab-trust">
-      <div class="panel">
-        <h2><svg class="icon"><use href="#i-chart"/></svg>Live metrics</h2>
-        <div class="cards" id="metric-cards"></div>
-      </div>
+      <div class="panel"><h2><svg class="icon"><use href="#i-chart"/></svg>Live metrics</h2><div class="cards" id="metric-cards"></div></div>
       <div class="panel">
         <h2>Comparison across runs</h2>
         <div class="charts">
@@ -145,20 +185,9 @@
         </div>
         <p class="hint">Seeded with the measured knife / lip-balm / keyboard captures; new UI runs append here.</p>
       </div>
-      <div class="panel">
-        <h2><svg class="icon"><use href="#i-spark"/></svg>Run report</h2>
-        <div class="cards" id="report-cards"></div>
-        <pre class="log small wrap" id="report-json"></pre>
-      </div>
-      <div class="panel">
-        <h2>EU ALTAI requirements</h2>
-        <div class="altai" id="altai"></div>
-      </div>
-      <div class="panel">
-        <h2>Failure catalogue</h2>
-        <p class="hint">Every failure has a stable code and actionable hints; the Studio shows them when a run fails.</p>
-        <div class="diag" id="diagnostics"></div>
-      </div>
+      <div class="panel"><h2><svg class="icon"><use href="#i-spark"/></svg>Run report</h2><div class="cards" id="report-cards"></div><pre class="log small wrap" id="report-json"></pre></div>
+      <div class="panel"><h2>EU ALTAI requirements</h2><div class="altai" id="altai"></div></div>
+      <div class="panel"><h2>Failure catalogue</h2><p class="hint">Every failure has a stable code and actionable hints; the Studio shows them when a run fails.</p><div class="diag" id="diagnostics"></div></div>
       <div class="panel">
         <h2>Trust controls</h2>
         <div class="trust-actions">
@@ -175,7 +204,7 @@
     <section class="tab-panel" id="tab-guide">
       <div class="panel">
         <h2><svg class="icon"><use href="#i-gear"/></svg>What each setting does</h2>
-        <p class="hint">Every control in the Studio, with what it changes and which direction costs what.</p>
+        <p class="hint">Every slot in the loadout, with what it changes and which direction costs what.</p>
         <div class="guide" id="guide"></div>
       </div>
     </section>
@@ -184,27 +213,10 @@
       <div class="panel credits">
         <h2>Credits</h2>
         <div class="credit-grid">
-          <div>
-            <h3>Author</h3>
-            <p><strong>Adarsh Gupta</strong> — semester project.<br />
-            Institution: <em>[add your university]</em><br />
-            Advisor: <em>[add advisor]</em></p>
-          </div>
-          <div>
-            <h3>Built on</h3>
-            <p>kornia-rs (SfM, calibration, geometry), three.js (viewer), Blender (renders),
-            Open3D (Poisson comparison), GStreamer (decode).</p>
-          </div>
-          <div>
-            <h3>AI disclosure</h3>
-            <p>Implemented with AI assistance: OpenCode CLI, DeepSeek V4.1 Flash.
-            The author defined the scope, reviewed every change and owns the design.
-            Every reported number comes from a measured run.</p>
-          </div>
-          <div>
-            <h3>License</h3>
-            <p>MIT · <a href="https://github.com/AdarshGuptaa/meshprod" target="_blank" rel="noreferrer">github.com/AdarshGuptaa/meshprod</a></p>
-          </div>
+          <div><h3>Author</h3><p><strong>Adarsh Gupta</strong> — semester project.<br />Institution: <em>[add your university]</em><br />Advisor: <em>[add advisor]</em></p></div>
+          <div><h3>Built on</h3><p>kornia-rs (SfM, calibration, geometry), three.js (viewer), Blender (renders), Open3D (Poisson comparison), GStreamer (decode).</p></div>
+          <div><h3>AI disclosure</h3><p>Implemented with AI assistance: OpenCode CLI, DeepSeek V4.1 Flash. The author defined the scope, reviewed every change and owns the design. Every reported number comes from a measured run.</p></div>
+          <div><h3>License</h3><p>MIT · <a href="https://github.com/AdarshGuptaa/meshprod" target="_blank" rel="noreferrer">github.com/AdarshGuptaa/meshprod</a></p></div>
         </div>
       </div>
     </section>

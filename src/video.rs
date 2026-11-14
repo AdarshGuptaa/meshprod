@@ -191,6 +191,15 @@ pub fn read_frames(path: &Path, frame_step: usize) -> Result<VideoFrames, Box<dy
                 }
                 frame_idx += 1;
                 stats.progress();
+                if stats.frames_grabbed.is_multiple_of(PROGRESS_INTERVAL) {
+                    if let (Some(pos), Some(dur)) = (reader.get_pos(), reader.get_duration()) {
+                        crate::error::progress(
+                            1,
+                            pos.as_millis() as usize,
+                            dur.as_millis() as usize,
+                        );
+                    }
+                }
             }
             None => {
                 consecutive_none += 1;

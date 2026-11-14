@@ -7,6 +7,7 @@
 //! neighbours' own depth maps (left-right consistency) before use.
 
 use std::error::Error;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kornia_3d::camera::PinholeCamera;
 use kornia_3d::pose::Pose3d;
@@ -673,6 +674,8 @@ pub fn estimate_depth_maps(
     }
 
     let mut maps: Vec<Option<DepthMap>> = (0..reconstruction.views.len()).map(|_| None).collect();
+    let total_views = registered.len();
+    let done_views = AtomicUsize::new(0);
 
     let census: Vec<CensusMap> = if cfg.method == CostMethod::Ncc {
         Vec::new()
@@ -694,7 +697,7 @@ pub fn estimate_depth_maps(
         registered
             .iter()
             .filter_map(|&i| {
-                sweep_view_census(
+                let result = sweep_view_census(
                     i,
                     gray_frames,
                     cameras,
@@ -702,8 +705,12 @@ pub fn estimate_depth_maps(
                     reconstruction,
                     cfg,
                     &census,
-                )
-                .map(|m| (i, m))
+                );
+                let n = done_views.fetch_add(1, Ordering::Relaxed) + 1;
+                if n.is_multiple_of(2) || n == total_views {
+                    crate::error::progress(7, n, total_views);
+                }
+                result.map(|m| (i, m))
             })
             .collect()
     } else {
@@ -734,6 +741,7 @@ pub fn estimate_depth_maps(
             })
             .collect()
     };
+    crate::error::progress(7, total_views, total_views);
     for (i, m) in computed {
         maps[i] = Some(m);
     }

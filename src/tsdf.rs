@@ -7,6 +7,7 @@
 //! measurement are left unobserved (weight zero).
 
 use std::error::Error;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kornia_3d::camera::PinholeCamera;
 use kornia_3d::pose::Pose3d;
@@ -254,6 +255,7 @@ pub fn fuse(
 
     // Parallel over x-slices; each slice owns disjoint output ranges.
     let slice = dims[1] * dims[2];
+    let done_slices = AtomicUsize::new(0);
     sdf.par_chunks_mut(slice)
         .zip(weight.par_chunks_mut(slice))
         .enumerate()
@@ -314,6 +316,10 @@ pub fn fuse(
                         weight_slice[idx] = w_sum;
                     }
                 }
+            }
+            let n = done_slices.fetch_add(1, Ordering::Relaxed) + 1;
+            if n.is_multiple_of(8) || n == dims[0] {
+                crate::error::progress(8, n, dims[0]);
             }
         });
 

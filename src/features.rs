@@ -410,6 +410,7 @@ pub fn extract_features_parallel(
     let report = |n: usize| {
         if n.is_multiple_of(50) || n == total {
             eprintln!("  features: {n}/{total} frames");
+            crate::error::progress(2, n, total);
         }
     };
     let result: Result<Vec<_>, String> = frames

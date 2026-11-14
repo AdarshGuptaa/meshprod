@@ -134,9 +134,17 @@ pub struct RunSummary {
     pub cost: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+struct ProgressView {
+    stage: usize,
+    done: usize,
+    total: usize,
+}
+
 struct Job {
     status: String,
     stage: usize,
+    progress: Option<ProgressView>,
     log: Vec<String>,
     stats: Stats,
     error: Option<serde_json::Value>,
@@ -172,6 +180,7 @@ pub fn serve(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         job: Arc::new(Mutex::new(Job {
             status: "idle".into(),
             stage: 0,
+            progress: None,
             log: Vec::new(),
             stats: Stats::default(),
             error: None,
@@ -262,6 +271,7 @@ struct StatusView {
     stage: usize,
     log: Vec<String>,
     stats: Stats,
+    progress: Option<ProgressView>,
     error: Option<serde_json::Value>,
     report: Option<serde_json::Value>,
     video: Option<String>,
@@ -283,6 +293,7 @@ async fn status(State(app): State<App>) -> Json<StatusView> {
         stage: job.stage,
         log: job.log[log_start..].to_vec(),
         stats: job.stats.clone(),
+        progress: job.progress.clone(),
         error: job.error.clone(),
         report: job.report.clone(),
         video: job
@@ -368,6 +379,7 @@ async fn run(
         *job = Job {
             status: "running".into(),
             stage: 0,
+            progress: None,
             log: vec![format!("uploaded {filename} ({size_mb} MB)")],
             stats: Stats::default(),
             error: None,
@@ -565,6 +577,17 @@ fn build_args(c: &Config) -> Vec<String> {
 }
 
 fn parse_line(line: &str, job: &mut Job) {
+    if let Some(rest) = line.strip_prefix("PROGRESS ") {
+        let mut parts = rest.split_whitespace();
+        let (Some(stage), Some(done), Some(total)) = (parts.next(), parts.next(), parts.next())
+        else {
+            return;
+        };
+        if let (Ok(stage), Ok(done), Ok(total)) = (stage.parse(), done.parse(), total.parse()) {
+            job.progress = Some(ProgressView { stage, done, total });
+        }
+        return;
+    }
     if let Some(rest) = line.strip_prefix('[') {
         if let Some(slash) = rest.find("/9]") {
             if let Ok(n) = rest[..slash].trim().parse::<usize>() {

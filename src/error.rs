@@ -222,6 +222,15 @@ pub fn catalogue() -> Vec<serde_json::Value> {
     .collect()
 }
 
+/// Emit a machine-readable stage progress line.
+///
+/// The web UI parses `PROGRESS <stage> <done> <total>` from stderr to drive
+/// per-stage loading bars. Stages that cannot report partial work are simply
+/// emitted as `1/1` when they finish.
+pub fn progress(stage: usize, done: usize, total: usize) {
+    eprintln!("PROGRESS {stage} {done} {}", total.max(1));
+}
+
 /// Write `<output>_error.json` next to the requested output.
 pub fn write_error_file(output: &Path, error: &PipelineError) {
     let path = sibling_json(output, "_error");

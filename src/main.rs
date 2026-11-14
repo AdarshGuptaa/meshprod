@@ -443,6 +443,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
 
     // 3.5. Optional: geometric verification (epipolar RANSAC) to reject false matches.
     let edges = if args.geo_verify {
+        error::set_stage(4);
         eprintln!(
             "[3.5/9] geometric verification (threshold={} px, min_inliers={})",
             args.geo_threshold, args.geo_min_inliers
@@ -462,13 +463,14 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             edges.len(),
             t.elapsed().as_secs_f64()
         );
+        error::progress(4, 1, 1);
         edges
     } else {
         edges
     };
 
     // 4. Chain matches into multi-view tracks.
-    error::set_stage(4);
+    error::set_stage(5);
     eprintln!("[4/9] building tracks");
     let t = Instant::now();
     let tracks = build_tracks(&edges);
@@ -477,13 +479,14 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         tracks.len(),
         t.elapsed().as_secs_f64()
     );
+    error::progress(5, 1, 1);
 
     // Sample every raw observation's colour now; RGB frames stay resident for
     // the dense stage's texturing.
     let observation_colors = ply_writer::sample_observation_colors(&tracks, &rgb_frames);
 
     // 5. Reconstruct the scene.
-    error::set_stage(5);
+    error::set_stage(6);
     eprintln!("[5/9] reconstructing scene");
     let t = Instant::now();
     let progress_start = Instant::now();
@@ -492,6 +495,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             "  reconstruct: {registered}/{n_cams} views registered ({:.1}s)",
             progress_start.elapsed().as_secs_f64()
         );
+        error::progress(6, registered, n_cams);
     });
     let overrides = reconstruction::ReconstructionOverrides {
         max_iterations: Some(args.max_ba_iterations),
@@ -559,6 +563,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     }
 
     // 6. Dense depth maps by plane sweeping (one per registered view).
+    error::set_stage(7);
     eprintln!(
         "[6/9] estimating dense depth (scale {:.2}, {} planes, {} neighbours)",
         args.dense_scale, args.dense_planes, args.dense_neighbors
@@ -699,6 +704,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     eprintln!("  dense cloud: {} points", cloud.points.len());
 
     // 7. Fuse the depth maps into a signed distance field.
+    error::set_stage(8);
     eprintln!(
         "[7/9] fusing TSDF (resolution {}, truncation {:.1} voxels)",
         args.voxel_resolution, args.trunc_voxels
@@ -758,7 +764,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     }
 
     // 8. Extract the surface, simplify it, and compute vertex attributes.
-    error::set_stage(8);
+    error::set_stage(9);
     eprintln!("[8/9] extracting surface and simplifying");
     let t = Instant::now();
     let mut mesh = mesh::marching_tetrahedra(&volume);
@@ -957,6 +963,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         message: e.to_string(),
     })?;
     eprintln!("[9/9] wrote run report to {}", report_path.display());
+    error::progress(9, 1, 1);
 
     Ok(())
 }

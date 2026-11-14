@@ -8,105 +8,6 @@ if (new URLSearchParams(location.search).has("static")) {
 
 const STAGES = ["decode", "features", "match", "verify", "tracks", "sparse", "dense", "fusion", "mesh"];
 
-const SCHEMA = [
-  {
-    title: "Matching",
-    open: false,
-    items: [
-      { key: "detector", label: "Detector", type: "select", options: ["sift", "orb"],
-        help: "SIFT is scale- and rotation-invariant and the safer choice for phone orbits. ORB uses binary descriptors: much faster, weaker across large viewpoint changes." },
-      { key: "frame_step", label: "Frame step", type: "range", min: 1, max: 30, step: 1,
-        help: "Keep every Nth frame. Higher = larger baselines and faster, but fewer overlapping matches. 10 suits 30–120 fps clips." },
-      { key: "n_features", label: "Max features", type: "range", min: 100, max: 2000, step: 100,
-        help: "Keypoints per frame. More gives denser tracks and better registration; matching cost grows linearly." },
-      { key: "match_window", label: "Match window", type: "range", min: 1, max: 12, step: 1,
-        help: "How many following frames each frame is matched against. Larger bridges fast motion but admits more outliers." },
-      { key: "ratio", label: "Lowe ratio", type: "range", min: 0.6, max: 0.95, step: 0.01,
-        help: "Ratio test between best and second-best descriptor. Lower is stricter: fewer false matches, fewer matches overall. 0.8 is standard." },
-      { key: "geo_verify", label: "Epipolar verification", type: "toggle",
-        help: "RANSAC fundamental-matrix check per frame pair. Removes descriptor false positives at a small time cost." },
-      { key: "sprt", label: "SPRT registration", type: "toggle",
-        help: "Wald sequential test during PnP: rejects hopeless poses early. Same decision, less time." },
-      { key: "refine_intrinsics", label: "Refine intrinsics", type: "toggle",
-        help: "Fits a global focal scale plus radial/tangential distortion against the solve. Useful when intrinsics were guessed." },
-      { key: "auto_config", label: "Auto-config from texture", type: "toggle",
-        help: "Measures frame texture and picks cost, window, NCC threshold and plane count. Overrides those fields; every choice is logged." },
-    ],
-  },
-  {
-    title: "Dense depth",
-    open: true,
-    items: [
-      { key: "cost", label: "Cost", type: "select", options: ["ncc", "census", "sgm"],
-        help: "ncc = normalized cross-correlation. census = intensity-ordering comparison (better on gentle shading). sgm = census plus a smoothness prior that fills low-texture regions." },
-      { key: "dense_scale", label: "Dense scale", type: "range", min: 0.25, max: 1, step: 0.05,
-        help: "Depth-map resolution relative to the source. 0.5 = half resolution and roughly 4× faster." },
-      { key: "dense_planes", label: "Planes", type: "range", min: 32, max: 160, step: 8,
-        help: "Inverse-depth planes swept per pixel. More = finer depth resolution, linearly slower." },
-      { key: "dense_window", label: "Window", type: "range", min: 3, max: 7, step: 2,
-        help: "Photometric window side. Larger is more robust to noise but blurs depth edges." },
-      { key: "dense_neighbors", label: "Neighbours", type: "range", min: 1, max: 5, step: 1,
-        help: "Neighbouring views each view compares against. More = more robust, slower." },
-      { key: "ncc_min", label: "Min NCC", type: "range", min: 0.2, max: 0.7, step: 0.05,
-        help: "Minimum similarity for a depth pixel. Lower keeps more pixels (more coverage, more noise)." },
-      { key: "lr_required", label: "Agreements", type: "range", min: 1, max: 3, step: 1,
-        help: "Neighbours that must independently agree. 2 is stricter and more accurate but halves coverage on noisy captures." },
-      { key: "sgm_paths", label: "SGM paths", type: "range", min: 1, max: 8, step: 1,
-        help: "Aggregation directions for SGM. Four cardinals are the default; eight adds diagonals (better smoothing, slower)." },
-    ],
-  },
-  {
-    title: "Fusion",
-    open: false,
-    items: [
-      { key: "voxel_resolution", label: "Voxel resolution", type: "range", min: 64, max: 384, step: 16,
-        help: "Grid points along the longest scene axis. Higher = finer mesh, more memory and time." },
-      { key: "trunc_voxels", label: "Truncation", type: "range", min: 1, max: 8, step: 0.5,
-        help: "Truncation band in voxels. It must exceed the depth noise; too small and views disagree, tearing the surface." },
-      { key: "volume_smoothing", label: "Field smoothing", type: "range", min: 0, max: 4, step: 1,
-        help: "Box-filter passes on the signed distance field. Removes voxel-scale pyramids before meshing." },
-      { key: "hole_fill_iterations", label: "Hole fill", type: "range", min: 0, max: 8, step: 1,
-        help: "Diffusion passes into unobserved voxels. Off by default: diffusion invents surface where no camera looked." },
-      { key: "remove_plane", label: "Remove dominant plane", type: "toggle",
-        help: "RANSAC-removes the dominant plane (table, floor) from the dense cloud before fusion." },
-    ],
-  },
-  {
-    title: "Mesh",
-    open: false,
-    items: [
-      { key: "smooth_iterations", label: "Taubin smoothing", type: "range", min: 0, max: 16, step: 1,
-        help: "Alternating Laplacian passes (λ/μ) that smooth without shrinking. Eight is a good default." },
-      { key: "bilateral_iterations", label: "Bilateral smoothing", type: "range", min: 0, max: 4, step: 1,
-        help: "Feature-preserving passes: flattens noise but keeps edges such as keycaps and blade bevels." },
-      { key: "needle_aspect", label: "Needle filter", type: "range", min: 0, max: 30, step: 1,
-        help: "Drop triangles above this longest/shortest edge ratio. Zero disables it; a strict value opens many edges on noisy clouds." },
-      { key: "target_faces", label: "Target faces", type: "range", min: 5000, max: 150000, step: 5000,
-        help: "Quadric edge-collapse budget. Lower gives a simpler, lighter mesh." },
-      { key: "min_component_faces", label: "Min patch", type: "range", min: 0, max: 2000, step: 50,
-        help: "Drop connected surface patches smaller than this. Higher cleans floaters but may remove real surface." },
-    ],
-  },
-];
-
-const PRESETS = {
-  fast: { frame_step: 20, dense_scale: 0.35, dense_planes: 64, voxel_resolution: 192, target_faces: 20000 },
-  balanced: {},
-  quality: { frame_step: 5, dense_scale: 0.75, dense_planes: 128, voxel_resolution: 320, target_faces: 80000 },
-  auto: { auto_config: true },
-};
-
-const ALTAI = [
-  ["Human agency", "Every parameter is exposed and logged; a person decides when a mesh is usable. The pipeline never auto-accepts a result.", "good"],
-  ["Robustness", "Deterministic reruns, depth-vs-sparse checks, mesh-quality pack and named failures. Degradation is visible, not silent.", "good"],
-  ["Privacy", "Bound to 127.0.0.1. No uploads, no telemetry; runs stay in web_runs/ on this machine.", "good"],
-  ["Transparency", "Live logs, derived parameters, failure codes with hints, and exportable run configs.", "good"],
-  ["Fairness", "Only three captures evaluated (specular, textureless, textured). More object categories are needed.", "warn"],
-  ["Environment", "CPU-only path, ~1 minute per scan; resource use is recorded in every run report.", "good"],
-  ["Accountability", "Provenance hashes, measured claims, pinned dependency, MIT license and AI disclosure.", "good"],
-];
-
-// Mirror of the server defaults so the first paint does not wait on the feed.
 const DEFAULT_CONFIG = {
   fx: 895, fy: 895, cx: 640, cy: 360,
   detector: "sift", frame_step: 10, n_features: 500, match_window: 5, ratio: 0.8,
@@ -119,35 +20,150 @@ const DEFAULT_CONFIG = {
   needle_aspect: 0.0, target_faces: 100000, min_component_faces: 200,
 };
 
+const SCHEMA = [
+  {
+    title: "Camera", icon: "i-camera", open: true,
+    items: [
+      { key: "fx", label: "fx", type: "number", min: 100, max: 4000, step: 0.5,
+        help: "Focal length in x, in pixels. f_px = f_35mm / 36 × frame width (about 895 px for 1280×720 phone video)." },
+      { key: "fy", label: "fy", type: "number", min: 100, max: 4000, step: 0.5,
+        help: "Focal length in y. Equal to fx for square pixels." },
+      { key: "cx", label: "cx", type: "number", min: 0, max: 4000, step: 0.5,
+        help: "Principal point x. The image centre is the standard guess for a phone lens." },
+      { key: "cy", label: "cy", type: "number", min: 0, max: 4000, step: 0.5,
+        help: "Principal point y. The image centre is the standard guess for a phone lens." },
+    ],
+  },
+  {
+    title: "Matching", icon: "i-layers", open: false,
+    items: [
+      { key: "detector", label: "Detector", type: "select", options: ["sift", "orb"],
+        help: "SIFT is scale- and rotation-invariant and the safer choice for phone orbits. ORB uses binary descriptors: much faster, weaker across large viewpoint changes." },
+      { key: "frame_step", label: "Frame step", type: "range", min: 1, max: 30, step: 1,
+        help: "Keep every Nth frame. Higher means larger baselines, faster runs and fewer overlapping matches. 10 suits 30–120 fps clips." },
+      { key: "n_features", label: "Max features", type: "range", min: 100, max: 2000, step: 100,
+        help: "Keypoints per frame. More gives denser tracks and better registration; matching cost grows linearly." },
+      { key: "match_window", label: "Match window", type: "range", min: 1, max: 12, step: 1,
+        help: "How many following frames each frame is matched against. Larger bridges fast motion but admits more outliers." },
+      { key: "ratio", label: "Lowe ratio", type: "range", min: 0.6, max: 0.95, step: 0.01,
+        help: "Ratio between the best and second-best descriptor. Lower is stricter: fewer false matches, fewer matches overall. 0.8 is standard." },
+      { key: "geo_verify", label: "Epipolar check", type: "toggle",
+        help: "RANSAC fundamental-matrix check per frame pair. Removes descriptor false positives at a small time cost." },
+      { key: "sprt", label: "SPRT", type: "toggle",
+        help: "Wald sequential test during PnP: rejects hopeless poses early. Same decision, less time." },
+      { key: "refine_intrinsics", label: "Refine K", type: "toggle",
+        help: "Fits a global focal scale plus radial/tangential distortion against the solve. Useful when intrinsics were guessed." },
+      { key: "auto_config", label: "Auto-config", type: "toggle",
+        help: "Measures frame texture and picks cost, window, NCC threshold and plane count. Overrides those fields; every choice is logged." },
+    ],
+  },
+  {
+    title: "Dense depth", icon: "i-chart", open: true,
+    items: [
+      { key: "cost", label: "Cost", type: "select", options: ["ncc", "census", "sgm"],
+        help: "ncc = normalized cross-correlation. census = intensity-ordering comparison, better on gentle shading. sgm = census plus a smoothness prior that fills low-texture regions." },
+      { key: "dense_scale", label: "Scale", type: "range", min: 0.25, max: 1, step: 0.05,
+        help: "Depth-map resolution relative to the source. 0.5 is half resolution and roughly 4× faster." },
+      { key: "dense_planes", label: "Planes", type: "range", min: 32, max: 160, step: 8,
+        help: "Inverse-depth planes swept per pixel. More means finer depth resolution, linearly slower." },
+      { key: "dense_window", label: "Window", type: "range", min: 3, max: 7, step: 2,
+        help: "Photometric window side. Larger is more robust to noise but blurs depth edges." },
+      { key: "dense_neighbors", label: "Neighbours", type: "range", min: 1, max: 5, step: 1,
+        help: "Neighbouring views each view compares against. More is more robust, and slower." },
+      { key: "ncc_min", label: "Min NCC", type: "range", min: 0.2, max: 0.7, step: 0.05,
+        help: "Minimum similarity for a depth pixel. Lower keeps more pixels (more coverage, more noise)." },
+      { key: "lr_required", label: "Agreements", type: "range", min: 1, max: 3, step: 1,
+        help: "Neighbours that must independently agree. 2 is stricter and more accurate but halves coverage on noisy captures." },
+      { key: "sgm_paths", label: "SGM paths", type: "range", min: 1, max: 8, step: 1,
+        help: "Aggregation directions for SGM. Four cardinals are the default; eight adds diagonals (better smoothing, slower)." },
+    ],
+  },
+  {
+    title: "Fusion", icon: "i-cube", open: false,
+    items: [
+      { key: "voxel_resolution", label: "Resolution", type: "range", min: 64, max: 384, step: 16,
+        help: "Grid points along the longest scene axis. Higher means a finer mesh, more memory and time." },
+      { key: "trunc_voxels", label: "Truncation", type: "range", min: 1, max: 8, step: 0.5,
+        help: "Truncation band in voxels. It must exceed the depth noise; too small and views disagree, tearing the surface." },
+      { key: "volume_smoothing", label: "Field smooth", type: "range", min: 0, max: 4, step: 1,
+        help: "Box-filter passes on the signed distance field. Removes voxel-scale pyramids before meshing." },
+      { key: "hole_fill_iterations", label: "Hole fill", type: "range", min: 0, max: 8, step: 1,
+        help: "Diffusion passes into unobserved voxels. Off by default: diffusion invents surface where no camera looked." },
+      { key: "remove_plane", label: "Remove plane", type: "toggle",
+        help: "RANSAC-removes the dominant plane (table, floor) from the dense cloud before fusion." },
+    ],
+  },
+  {
+    title: "Mesh", icon: "i-gear", open: false,
+    items: [
+      { key: "smooth_iterations", label: "Taubin", type: "range", min: 0, max: 16, step: 1,
+        help: "Alternating Laplacian passes (λ/μ) that smooth without shrinking. Eight is a good default." },
+      { key: "bilateral_iterations", label: "Bilateral", type: "range", min: 0, max: 4, step: 1,
+        help: "Feature-preserving passes: flattens noise but keeps edges such as keycaps and blade bevels." },
+      { key: "needle_aspect", label: "Needle", type: "range", min: 0, max: 30, step: 1,
+        help: "Drop triangles above this longest/shortest edge ratio. Zero disables it; a strict value opens many edges on noisy clouds." },
+      { key: "target_faces", label: "Faces", type: "range", min: 5000, max: 150000, step: 5000,
+        help: "Quadric edge-collapse budget. Lower gives a simpler, lighter mesh." },
+      { key: "min_component_faces", label: "Min patch", type: "range", min: 0, max: 2000, step: 50,
+        help: "Drop connected surface patches smaller than this. Higher cleans floaters but may remove real surface." },
+    ],
+  },
+];
+
+for (const group of SCHEMA) {
+  for (const item of group.items) {
+    item.group = group.title;
+    item.icon = group.icon;
+  }
+}
+
+const PRESETS = {
+  fast: { frame_step: 20, dense_scale: 0.35, dense_planes: 64, voxel_resolution: 192, target_faces: 20000 },
+  balanced: {},
+  quality: { frame_step: 5, dense_scale: 0.75, dense_planes: 128, voxel_resolution: 320, target_faces: 80000 },
+  auto: { auto_config: true },
+};
+
+const ALTAI = [
+  ["Human agency", "Every parameter is exposed and logged; a person decides when a mesh is usable. The pipeline never auto-accepts a result.", "good"],
+  ["Robustness", "Deterministic reruns, depth-vs-sparse checks, a mesh-quality pack and named failures. Degradation is visible, not silent.", "good"],
+  ["Privacy", "Bound to 127.0.0.1. No uploads, no telemetry; runs stay in web_runs/ on this machine.", "good"],
+  ["Transparency", "Live logs, derived parameters, failure codes with hints, and exportable run configs.", "good"],
+  ["Fairness", "Only three captures evaluated (specular, textureless, textured). More object categories are needed.", "warn"],
+  ["Environment", "CPU-only path, about a minute per scan; resource use is recorded in every run report.", "good"],
+  ["Accountability", "Provenance hashes, measured claims, pinned dependency, MIT license and AI disclosure.", "good"],
+];
+
 const SEED_HISTORY = [
   { name: "swiss_knife", faces: 86971, depth_median: 4.0, patches: 33, views: 22 },
   { name: "lip_balm", faces: 19581, depth_median: 14.8, patches: 41, views: 66 },
   { name: "keyboard", faces: 4880, depth_median: 4.5, patches: 4, views: 63 },
 ];
 
+const GOLD = "#d8b25c";
+const STEEL = "#7fa8c9";
+const INK = "#ece4d2";
+
 let config = { ...DEFAULT_CONFIG };
 let stats = null;
 let lastMeshKey = null;
-let chartData = [];
+let chartData = SEED_HISTORY;
 let videoFile = null;
+let selectedKey = null;
+let viewerActive = true;
 
 /* ---------- tabs ---------- */
 const tabs = [...document.querySelectorAll(".tab")];
-tabs.forEach((tab) => {
-  tab.addEventListener("click", () => activateTab(tab.dataset.tab));
-});
-let viewerActive = true;
+tabs.forEach((tab) => tab.addEventListener("click", () => activateTab(tab.dataset.tab)));
 function activateTab(name) {
   viewerActive = name === "studio";
   tabs.forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
-  document.querySelectorAll(".tab-panel").forEach((p) =>
-    p.classList.toggle("active", p.id === `tab-${name}`),
-  );
+  document.querySelectorAll(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${name}`));
   if (name === "slides") resizeSlides();
   history.replaceState(null, "", `#${name}`);
 }
 
-/* ---------- config form ---------- */
+/* ---------- inventory slots ---------- */
 function renderGroups() {
   const host = document.getElementById("config-groups");
   host.innerHTML = "";
@@ -158,57 +174,95 @@ function renderGroups() {
     const summary = document.createElement("summary");
     summary.textContent = group.title;
     details.appendChild(summary);
-    for (const item of group.items) details.appendChild(item.type === "toggle" ? toggleRow(item) : rangeRow(item));
+    const grid = document.createElement("div");
+    grid.className = "slot-grid";
+    for (const item of group.items) grid.appendChild(slotEl(item));
+    details.appendChild(grid);
     host.appendChild(details);
+  }
+  if (selectedKey) {
+    document.querySelectorAll(".slot").forEach((s) => s.classList.toggle("selected", s.dataset.key === selectedKey));
   }
 }
 
-function rangeRow(item) {
-  const row = document.createElement("div");
-  row.className = "row";
-  const label = document.createElement("label");
-  label.textContent = item.label;
-  label.title = item.help;
-  const value = document.createElement("span");
-  value.className = "value";
-  const input = document.createElement("input");
-  input.type = "range";
-  input.min = item.min;
-  input.max = item.max;
-  input.step = item.step;
-  input.value = config[item.key];
-  input.title = item.help;
-  value.textContent = formatValue(config[item.key]);
-  input.addEventListener("input", () => {
-    config[item.key] = Number(input.value);
-    value.textContent = formatValue(config[item.key]);
-  });
-  row.append(label, input, value);
-  return row;
+function slotEl(item) {
+  const btn = document.createElement("button");
+  btn.className = "slot";
+  btn.dataset.key = item.key;
+  btn.type = "button";
+  if (item.type === "select" || item.type === "toggle") btn.classList.add("no-bar");
+  btn.innerHTML = `
+    <span class="slot-top"><svg class="icon"><use href="#${item.icon}"/></svg><span class="slot-name">${item.label}</span></span>
+    <span class="slot-value">${formatValue(config[item.key])}</span>
+    <span class="slot-bar"><i></i></span>`;
+  updateSlotEl(btn, item);
+  const select = () => openDetails(item);
+  btn.addEventListener("mouseenter", select);
+  btn.addEventListener("focus", select);
+  btn.addEventListener("click", select);
+  return btn;
 }
 
-function toggleRow(item) {
-  const row = document.createElement("div");
-  row.className = "row";
-  const label = document.createElement("label");
-  label.textContent = item.label;
-  label.title = item.help;
-  const sw = document.createElement("label");
-  sw.className = "switch";
-  const input = document.createElement("input");
-  input.type = "checkbox";
-  input.checked = Boolean(config[item.key]);
-  input.title = item.help;
-  input.addEventListener("change", () => (config[item.key] = input.checked));
-  const knob = document.createElement("span");
-  sw.append(input, knob);
-  row.append(label, sw);
-  return row;
+function updateSlotEl(btn, item) {
+  const value = config[item.key];
+  btn.querySelector(".slot-value").textContent = formatValue(value);
+  const bar = btn.querySelector(".slot-bar i");
+  if (item.type === "range" || item.type === "number") {
+    const pct = ((Number(value) - item.min) / (item.max - item.min)) * 100;
+    bar.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+  } else {
+    bar.style.width = value ? "100%" : "0%";
+  }
+}
+
+function updateSlot(item) {
+  const btn = document.querySelector(`.slot[data-key="${item.key}"]`);
+  if (btn) updateSlotEl(btn, item);
 }
 
 function formatValue(v) {
   if (typeof v !== "number") return String(v);
   return Number.isInteger(v) ? String(v) : v.toFixed(2);
+}
+
+function openDetails(item) {
+  selectedKey = item.key;
+  document.querySelectorAll(".slot").forEach((s) => s.classList.toggle("selected", s.dataset.key === item.key));
+  const value = config[item.key];
+  let control;
+  if (item.type === "range") {
+    control = `<input type="range" id="det-input" min="${item.min}" max="${item.max}" step="${item.step}" value="${value}">
+      <div class="value-line"><span>drag to change</span><span id="det-value">${formatValue(value)}</span></div>`;
+  } else if (item.type === "number") {
+    control = `<input type="number" id="det-input" min="${item.min}" max="${item.max}" step="${item.step}" value="${value}">
+      <div class="value-line"><span>value</span><span id="det-value">${formatValue(value)}</span></div>`;
+  } else if (item.type === "select") {
+    control = `<select id="det-input">${item.options.map((o) => `<option ${o === value ? "selected" : ""}>${o}</option>`).join("")}</select>`;
+  } else {
+    control = `<label class="switch"><input type="checkbox" id="det-input" ${value ? "checked" : ""}><span></span></label>`;
+  }
+  const host = document.getElementById("details");
+  host.innerHTML = `
+    <div class="det-head"><span class="det-name">${item.key}</span><span class="det-group">${item.group}</span></div>
+    <p class="det-help">${item.help}</p>
+    <div class="det-control">${control}</div>
+    <div class="det-foot"><button class="ghost" id="det-default">Reset to default</button></div>`;
+  const input = document.getElementById("det-input");
+  input.addEventListener("input", () => {
+    let next;
+    if (item.type === "toggle") next = input.checked;
+    else if (item.type === "select") next = input.value;
+    else next = Number(input.value);
+    config[item.key] = next;
+    updateSlot(item);
+    const label = document.getElementById("det-value");
+    if (label) label.textContent = formatValue(next);
+  });
+  document.getElementById("det-default").addEventListener("click", () => {
+    config[item.key] = DEFAULT_CONFIG[item.key];
+    updateSlot(item);
+    openDetails(item);
+  });
 }
 
 document.querySelectorAll("[data-preset]").forEach((btn) => {
@@ -217,16 +271,10 @@ document.querySelectorAll("[data-preset]").forEach((btn) => {
     btn.classList.add("active");
     Object.assign(config, PRESETS[btn.dataset.preset] || {});
     renderGroups();
+    const item = SCHEMA.flatMap((g) => g.items).find((i) => i.key === selectedKey);
+    if (item) openDetails(item);
   });
 });
-
-function bindIntrinsics() {
-  for (const key of ["fx", "fy", "cx", "cy"]) {
-    const input = document.getElementById(key);
-    input.value = config[key];
-    input.addEventListener("change", () => (config[key] = Number(input.value)));
-  }
-}
 
 /* ---------- guide ---------- */
 function renderGuide() {
@@ -252,7 +300,7 @@ function renderGuide() {
   }
 }
 
-/* ---------- upload ---------- */
+/* ---------- upload / run / poll ---------- */
 const dropzone = document.getElementById("dropzone");
 const videoInput = document.getElementById("video-input");
 dropzone.addEventListener("click", () => videoInput.click());
@@ -274,7 +322,6 @@ function setVideo(file) {
   document.getElementById("drop-sub").textContent = `${(file.size / 1048576).toFixed(1)} MB · ready to run`;
 }
 
-/* ---------- run ---------- */
 const runButton = document.getElementById("run-button");
 runButton.addEventListener("click", async () => {
   if (!videoFile) {
@@ -299,11 +346,9 @@ runButton.addEventListener("click", async () => {
   }
 });
 
-/* ---------- polling ---------- */
 async function poll() {
   try {
-    const res = await fetch("/api/status", { cache: "no-store" });
-    applyStatus(await res.json());
+    applyStatus(await (await fetch("/api/status", { cache: "no-store" })).json());
   } catch {
     /* server restarting */
   }
@@ -315,19 +360,15 @@ function applyStatus(data) {
   pill.textContent = data.status;
   pill.className = `status-pill ${data.status}`;
   stats = data.stats || {};
-
-  renderStages(data.stage, data.status);
+  renderStages(data.stage, data.status, data.progress);
   renderLog(data.log);
   renderCards(stats);
   renderError(data.error);
   if (data.report) renderReport(data.report);
   runButton.disabled = data.status === "running";
-  if (data.status === "running") {
-    runButton.innerHTML = '<svg class="icon"><use href="#i-play"/></svg>Reconstructing…';
-    document.getElementById("download-mesh").style.display = "none";
-  } else {
-    runButton.innerHTML = '<svg class="icon"><use href="#i-play"/></svg>Run reconstruction';
-  }
+  runButton.innerHTML = data.status === "running"
+    ? '<svg class="icon"><use href="#i-play"/></svg>Reconstructing…'
+    : '<svg class="icon"><use href="#i-play"/></svg>Run reconstruction';
   if (data.status === "done" && stats.faces) {
     const key = `${stats.faces}-${stats.seconds}`;
     if (key !== lastMeshKey) {
@@ -340,21 +381,31 @@ function applyStatus(data) {
   }
 }
 
-function renderStages(current, status) {
+function renderStages(current, status, progress) {
   const host = document.getElementById("stages");
   if (host.childElementCount !== STAGES.length) {
     host.innerHTML = "";
     for (const name of STAGES) {
       const el = document.createElement("div");
       el.className = "stage";
-      el.textContent = name;
+      el.innerHTML = `<span class="stage-name">${name}</span><span class="stage-bar"><i></i></span>`;
       host.appendChild(el);
     }
   }
   [...host.children].forEach((el, i) => {
     const index = i + 1;
-    el.classList.toggle("done", status === "done" || index < current);
-    el.classList.toggle("active", status === "running" && index === current);
+    const done = status === "done" || index < current;
+    const active = status === "running" && index === current;
+    const bar = el.querySelector(".stage-bar i");
+    let pct = done ? 100 : 0;
+    if (active && progress && progress.stage === index && progress.total > 0) {
+      pct = Math.min(100, (progress.done / progress.total) * 100);
+    } else if (active) {
+      pct = 6;
+    }
+    bar.style.width = `${pct}%`;
+    el.classList.toggle("done", done);
+    el.classList.toggle("active", active);
   });
 }
 
@@ -394,7 +445,6 @@ function renderCards(s) {
   }
 }
 
-/* ---------- named errors ---------- */
 function hideError() {
   document.getElementById("error-banner").hidden = true;
 }
@@ -417,7 +467,6 @@ function renderError(err) {
   }
 }
 
-/* ---------- run report ---------- */
 function renderReport(report) {
   const q = report.mesh_quality || {};
   const p = report.provenance || {};
@@ -427,7 +476,7 @@ function renderReport(report) {
     ["Self-assessment", self.confidence != null ? `${(self.confidence * 100).toFixed(0)} % (${self.verdict})` : "—"],
     ["Closed mesh", q.closed ? "yes" : "no"],
     ["Boundary edges", q.boundary_edge_ratio != null ? `${(q.boundary_edge_ratio * 100).toFixed(1)} %` : "—"],
-    ["Degenerate faces", q.degenerate_faces ?? "—"],
+    ["Degenerate", q.degenerate_faces ?? "—"],
     ["Needle faces", q.needle_fraction != null ? `${(q.needle_fraction * 100).toFixed(1)} %` : "—"],
     ["Peak RSS", r.peak_rss_kb ? `${(r.peak_rss_kb / 1024).toFixed(0)} MB` : "—"],
     ["Elapsed", report.elapsed_s != null ? `${report.elapsed_s.toFixed(1)} s` : "—"],
@@ -445,7 +494,6 @@ function renderReport(report) {
   document.getElementById("report-json").textContent = JSON.stringify(report, null, 2);
 }
 
-/* ---------- diagnostics ---------- */
 async function loadDiagnostics() {
   const rows = await (await fetch("/api/diagnostics", { cache: "no-store" })).json();
   const host = document.getElementById("diagnostics");
@@ -471,8 +519,8 @@ async function loadDiagnostics() {
 
 /* ---------- charts ---------- */
 function drawHistory() {
-  drawChart(document.getElementById("chart-faces"), chartData.map((r) => r.faces), "#24405e");
-  drawChart(document.getElementById("chart-depth"), chartData.map((r) => r.depth_median), "#c19a3f");
+  drawChart(document.getElementById("chart-faces"), chartData.map((r) => r.faces), "#5f93c0");
+  drawChart(document.getElementById("chart-depth"), chartData.map((r) => r.depth_median), "#d8b25c");
 }
 
 async function loadHistory() {
@@ -499,14 +547,14 @@ function drawChart(svg, values, color) {
     rect.setAttribute("height", Math.max(bh, 1));
     rect.setAttribute("rx", 2);
     rect.setAttribute("fill", color);
-    rect.setAttribute("opacity", 0.88);
+    rect.setAttribute("opacity", 0.85);
     svg.appendChild(rect);
     const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
     label.setAttribute("x", pad + i * barW + barW / 2);
     label.setAttribute("y", h - pad + 12);
     label.setAttribute("text-anchor", "middle");
     label.setAttribute("font-size", "8");
-    label.setAttribute("fill", "#5a646c");
+    label.setAttribute("fill", "#8ea3b2");
     label.textContent = (chartData[i]?.name || "").slice(0, 9);
     svg.appendChild(label);
     const value = document.createElementNS("http://www.w3.org/2000/svg", "text");
@@ -514,7 +562,7 @@ function drawChart(svg, values, color) {
     value.setAttribute("y", h - pad - bh - 4);
     value.setAttribute("text-anchor", "middle");
     value.setAttribute("font-size", "8");
-    value.setAttribute("fill", "#1b2126");
+    value.setAttribute("fill", "#ece4d2");
     value.textContent = v >= 10000 ? `${(v / 1000).toFixed(0)}k` : v.toFixed(v < 100 ? 1 : 0);
     svg.appendChild(value);
   });
@@ -523,11 +571,10 @@ function drawChart(svg, values, color) {
   axis.setAttribute("x2", w - pad);
   axis.setAttribute("y1", h - pad);
   axis.setAttribute("y2", h - pad);
-  axis.setAttribute("stroke", "#d7cdb6");
+  axis.setAttribute("stroke", "rgba(122,160,190,.25)");
   svg.appendChild(axis);
 }
 
-/* ---------- ALTAI ---------- */
 function renderAltai() {
   const host = document.getElementById("altai");
   host.innerHTML = "";
@@ -539,16 +586,11 @@ function renderAltai() {
   }
 }
 
-/* ---------- config export ---------- */
 document.getElementById("export-config").addEventListener("click", () => {
   document.getElementById("config-json").textContent = JSON.stringify(config, null, 2);
 });
 
 /* ---------- slides ---------- */
-const GOLD = "#e2c88a";
-const STEEL = "#6d8aa6";
-const INK = "#efe7d4";
-
 function svg(body, viewBox = "0 0 360 280") {
   return `<svg viewBox="${viewBox}" fill="none" xmlns="http://www.w3.org/2000/svg">${body}</svg>`;
 }
@@ -739,7 +781,7 @@ let slideIndex = 0;
 function renderSlides() {
   const stage = document.getElementById("slide-stage");
   stage.innerHTML = "";
-  SLIDES.forEach((slide, i) => {
+  SLIDES.forEach((slide) => {
     const el = document.createElement("article");
     el.className = "slide";
     el.innerHTML = `
@@ -766,8 +808,7 @@ function renderSlides() {
 
 function showSlide(index) {
   slideIndex = (index + SLIDES.length) % SLIDES.length;
-  const nodes = [...document.querySelectorAll(".slide")];
-  nodes.forEach((el, i) => {
+  [...document.querySelectorAll(".slide")].forEach((el, i) => {
     el.classList.toggle("active", i === slideIndex);
     el.classList.toggle("past", i < slideIndex);
   });
@@ -788,22 +829,21 @@ document.getElementById("slide-present").addEventListener("click", async () => {
   }
   resizeSlides();
 });
-document.addEventListener("keydown", (e) => {
-  const slidesActive = document.getElementById("tab-slides").classList.contains("active");
-  if (!slidesActive) return;
-  if (e.key === "ArrowRight" || e.key === " ") { e.preventDefault(); showSlide(slideIndex + 1); }
-  if (e.key === "ArrowLeft") { e.preventDefault(); showSlide(slideIndex - 1); }
-  if (e.key === "Escape" && document.body.classList.contains("presenting")) {
-    document.body.classList.remove("presenting");
-  }
-});
 document.addEventListener("fullscreenchange", () => {
   if (!document.fullscreenElement) document.body.classList.remove("presenting");
+  resizeViewer();
 });
-
+document.addEventListener("keydown", (e) => {
+  const slidesActive = document.getElementById("tab-slides").classList.contains("active");
+  if (slidesActive) {
+    if (e.key === "ArrowRight" || e.key === " ") { e.preventDefault(); showSlide(slideIndex + 1); }
+    if (e.key === "ArrowLeft") { e.preventDefault(); showSlide(slideIndex - 1); }
+    if (e.key === "Escape" && document.body.classList.contains("presenting")) {
+      document.body.classList.remove("presenting");
+    }
+  }
+});
 function resizeSlides() {
-  // Slides are absolutely positioned; nothing to size, but re-assert the active
-  // class so the entrance animation plays when the tab becomes visible.
   const active = document.querySelector(".slide.active");
   if (active) {
     active.classList.remove("active");
@@ -813,8 +853,9 @@ function resizeSlides() {
 
 /* ---------- three.js viewer ---------- */
 const viewerHost = document.getElementById("viewer");
+const viewfinder = document.getElementById("viewfinder");
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1b2228);
+scene.background = new THREE.Color(0x0b1115);
 const camera = new THREE.PerspectiveCamera(50, 1, 0.001, 1e7);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -822,22 +863,28 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 viewerHost.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
-controls.dampingFactor = 0.08;
+controls.dampingFactor = 0.09;
+controls.zoomSpeed = 1.35;
+controls.panSpeed = 1.15;
+controls.rotateSpeed = 0.9;
+controls.screenSpacePanning = true;
 
-scene.add(new THREE.HemisphereLight(0xfdfaf2, 0x2a3339, 1.15));
+scene.add(new THREE.HemisphereLight(0xfdfaf2, 0x1a2229, 1.05));
 const key = new THREE.DirectionalLight(0xffffff, 2.0);
 key.position.set(3, 5, 4);
 scene.add(key);
-const fill = new THREE.DirectionalLight(0xcfd9de, 0.7);
+const fill = new THREE.DirectionalLight(0xbcd2e2, 0.65);
 fill.position.set(-4, 2, -3);
 scene.add(fill);
-const rim = new THREE.DirectionalLight(0xe2c88a, 0.5);
+const rim = new THREE.DirectionalLight(0xd8b25c, 0.55);
 rim.position.set(0, -4, -5);
 scene.add(rim);
 
 let current = null;
 let originalColors = null;
-let introUntil = 0;
+let camTween = null;
+let camRadius = 1;
+let camCenter = new THREE.Vector3();
 const loader = new PLYLoader();
 
 function loadMesh() {
@@ -846,9 +893,7 @@ function loadMesh() {
     `/api/mesh/mesh?t=${Date.now()}`,
     (geometry) => {
       geometry.computeVertexNormals();
-      originalColors = geometry.attributes.color
-        ? Float32Array.from(geometry.attributes.color.array)
-        : null;
+      originalColors = geometry.attributes.color ? Float32Array.from(geometry.attributes.color.array) : null;
       if (current) {
         scene.remove(current);
         current.geometry.dispose();
@@ -858,7 +903,9 @@ function loadMesh() {
       scene.add(current);
       fitCamera(geometry);
       document.getElementById("viewer-empty").classList.add("hidden");
-      introUntil = performance.now() + 3500;
+      controls.autoRotate = true;
+      controls.autoRotateSpeed = 1.1;
+      setTimeout(() => (controls.autoRotate = false), 3500);
     },
     undefined,
     () => appendLog("mesh load failed"),
@@ -870,14 +917,123 @@ function fitCamera(geometry) {
   const sphere = geometry.boundingSphere;
   if (!sphere) return;
   const r = Math.max(sphere.radius, 1e-6);
-  const c = sphere.center;
-  camera.position.set(c.x + r * 1.4, c.y + r * 0.9, c.z + r * 1.6);
-  camera.near = r / 200;
-  camera.far = r * 100;
+  camRadius = r;
+  camCenter = sphere.center.clone();
+  const dir = new THREE.Vector3(1.15, 0.72, 1.35).normalize();
+  camera.position.copy(camCenter).addScaledVector(dir, r * 1.35);
+  camera.near = r / 500;
+  camera.far = r * 120;
   camera.updateProjectionMatrix();
-  controls.target.copy(c);
+  controls.target.copy(camCenter);
+  controls.minDistance = r * 0.25;
+  controls.maxDistance = r * 8;
+  camTween = null;
   controls.update();
 }
+
+function tweenCamera(position, target, ms = 420) {
+  camTween = {
+    p0: camera.position.clone(),
+    p1: position.clone(),
+    t0: controls.target.clone(),
+    t1: target.clone(),
+    start: performance.now(),
+    ms,
+  };
+}
+
+function orbitBy(dTheta, dPhi) {
+  const offset = camera.position.clone().sub(controls.target);
+  const spherical = new THREE.Spherical().setFromVector3(offset);
+  spherical.theta += dTheta;
+  spherical.phi = THREE.MathUtils.clamp(spherical.phi + dPhi, 0.08, Math.PI - 0.08);
+  offset.setFromSpherical(spherical);
+  camera.position.copy(controls.target).add(offset);
+  camTween = null;
+  controls.update();
+}
+
+function zoomBy(factor) {
+  const offset = camera.position.clone().sub(controls.target);
+  const distance = THREE.MathUtils.clamp(
+    offset.length() * factor,
+    controls.minDistance,
+    controls.maxDistance,
+  );
+  offset.setLength(distance);
+  camera.position.copy(controls.target).add(offset);
+  camTween = null;
+  controls.update();
+}
+
+function panBy(dx, dy) {
+  const step = camRadius * 0.08;
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0);
+  const up = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1);
+  const delta = right.multiplyScalar(dx * step).add(up.multiplyScalar(dy * step));
+  camera.position.add(delta);
+  controls.target.add(delta);
+  camTween = null;
+  controls.update();
+}
+
+function setView(kind) {
+  const dirs = {
+    front: new THREE.Vector3(0, 0.08, 1),
+    top: new THREE.Vector3(0, 1, 0.02),
+    side: new THREE.Vector3(1, 0.08, 0),
+  };
+  const dir = dirs[kind];
+  if (!dir) return;
+  const position = camCenter.clone().addScaledVector(dir.normalize(), camRadius * 1.35);
+  tweenCamera(position, camCenter);
+}
+
+const camActions = {
+  "orbit-up": () => orbitBy(0, -0.16),
+  "orbit-down": () => orbitBy(0, 0.16),
+  "orbit-left": () => orbitBy(-0.2, 0),
+  "orbit-right": () => orbitBy(0.2, 0),
+  "zoom-in": () => zoomBy(0.8),
+  "zoom-out": () => zoomBy(1.25),
+  "pan-up": () => panBy(0, 1),
+  "pan-down": () => panBy(0, -1),
+  "pan-left": () => panBy(-1, 0),
+  "pan-right": () => panBy(1, 0),
+  reset: () => { if (current) fitCamera(current.geometry); },
+  fit: () => { if (current) fitCamera(current.geometry); },
+  front: () => setView("front"),
+  top: () => setView("top"),
+  side: () => setView("side"),
+  auto: () => { controls.autoRotate = !controls.autoRotate; },
+};
+
+document.querySelectorAll("[data-cam]").forEach((btn) => {
+  btn.addEventListener("click", () => camActions[btn.dataset.cam]?.());
+});
+
+document.getElementById("view-fullscreen").addEventListener("click", async () => {
+  if (!document.fullscreenElement) {
+    await viewfinder.requestFullscreen?.().catch(() => {});
+  } else {
+    await document.exitFullscreen?.().catch(() => {});
+  }
+  resizeViewer();
+});
+
+document.addEventListener("keydown", (e) => {
+  if (!document.getElementById("tab-studio").classList.contains("active")) return;
+  if (["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement?.tagName)) return;
+  const actions = {
+    ArrowUp: "orbit-up", ArrowDown: "orbit-down", ArrowLeft: "orbit-left", ArrowRight: "orbit-right",
+    "+": "zoom-in", "=": "zoom-in", "-": "zoom-out", "0": "reset", f: "fit", F: "fit",
+  };
+  const action = actions[e.key];
+  if (action) {
+    e.preventDefault();
+    camActions[action]?.();
+  }
+});
 
 function heightColors(geometry) {
   const pos = geometry.attributes.position;
@@ -890,7 +1046,7 @@ function heightColors(geometry) {
   const span = Math.max(max - min, 1e-9);
   const colors = new Float32Array(pos.count * 3);
   const low = new THREE.Color(0x24405e);
-  const high = new THREE.Color(0xe8dfc8);
+  const high = new THREE.Color(0xf0d79a);
   for (let i = 0; i < pos.count; i++) {
     const t = (pos.getY(i) - min) / span;
     const color = low.clone().lerp(high, t);
@@ -908,7 +1064,7 @@ function makeMaterial(style, geometry) {
     case "normals":
       return new THREE.MeshNormalMaterial();
     case "wireframe":
-      return new THREE.MeshBasicMaterial({ wireframe: true, color: 0xc9b071 });
+      return new THREE.MeshBasicMaterial({ wireframe: true, color: 0xd8b25c });
     case "xray":
       return new THREE.MeshStandardMaterial({
         color: 0x9db4bf, transparent: true, opacity: 0.22,
@@ -942,7 +1098,7 @@ document.querySelectorAll("[data-style]").forEach((btn) => {
   });
 });
 
-controls.addEventListener("start", () => { introUntil = 0; });
+controls.addEventListener("start", () => { controls.autoRotate = false; });
 
 function resizeViewer() {
   const { clientWidth: w, clientHeight: h } = viewerHost;
@@ -955,7 +1111,13 @@ new ResizeObserver(resizeViewer).observe(viewerHost);
 
 renderer.setAnimationLoop(() => {
   if (!viewerActive) return;
-  if (current && performance.now() < introUntil) current.rotation.y += 0.0035;
+  if (camTween) {
+    const t = Math.min(1, (performance.now() - camTween.start) / camTween.ms);
+    const e = t < 0.5 ? 2 * t * t : 1 - 2 * (1 - t) * (1 - t);
+    camera.position.lerpVectors(camTween.p0, camTween.p1, e);
+    controls.target.lerpVectors(camTween.t0, camTween.t1, e);
+    if (t >= 1) camTween = null;
+  }
   controls.update();
   renderer.render(scene, camera);
 });
@@ -964,7 +1126,6 @@ renderer.setAnimationLoop(() => {
 function firstPaint() {
   renderGroups();
   renderGuide();
-  bindIntrinsics();
   renderAltai();
   renderSlides();
   chartData = SEED_HISTORY;
@@ -973,15 +1134,18 @@ function firstPaint() {
   const initial = location.hash.replace("#", "");
   if (initial) activateTab(initial);
   document.getElementById("log").textContent = "waiting for a run…";
+  const first = SCHEMA[0].items[0];
+  openDetails(first);
 }
 
 async function syncWithServer() {
   try {
     config = await (await fetch("/api/defaults", { cache: "no-store" })).json();
     renderGroups();
-    bindIntrinsics();
+    const item = SCHEMA.flatMap((g) => g.items).find((i) => i.key === selectedKey);
+    if (item) openDetails(item);
   } catch {
-    /* offline: defaults are already rendered */
+    /* offline: local defaults already rendered */
   }
   await loadHistory();
   await loadDiagnostics();

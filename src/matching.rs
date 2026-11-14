@@ -142,6 +142,7 @@ pub fn match_pairs_parallel(
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             if n.is_multiple_of(100) || n == total_pairs {
                 eprintln!("  matching: {n}/{total_pairs} pairs");
+                crate::error::progress(3, n, total_pairs);
             }
             let matches = match_pair(&features[i], &features[j], ratio, cuda)?;
             Ok(matches
