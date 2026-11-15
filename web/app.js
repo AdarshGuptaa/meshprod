@@ -600,181 +600,131 @@ const SLIDES = [
   {
     kicker: "01",
     title: "meshprod",
-    body: `<p><strong>One monocular video in, one measured mesh out.</strong></p>
-      <p>Sparse structure-from-motion, dense multi-view stereo, signed-distance fusion, surface extraction and simplification — with a trust report attached to every run.</p>`,
-    chips: ["22–66 registered views", "20k–87k faces", "~1 min/scene", "deterministic"],
+    body: `<p><strong>One video in, one measured mesh out.</strong></p>
+      <p>Sparse structure-from-motion → dense multi-view stereo → fusion → surface → simplification.</p>`,
+    chips: ["22–140 views · 2.0 px RMSE", "4.9k–87k faces", "about 1–3 min", "deterministic"],
     figure: svg(`
-      <g stroke="${GOLD}" stroke-width="1.6" opacity="0.95">
-        <path d="M180 60 270 108 180 156 90 108Z"/><path d="M90 108v70l90 48 90-48v-70"/>
-        <path d="M180 156v70"/>
+      <g stroke="${GOLD}" stroke-width="2.6" opacity="0.95">
+        <path d="M200 60 320 128 200 196 80 128Z"/><path d="M80 128v92l120 68 120-68v-92"/>
+        <path d="M200 196v92"/>
       </g>
-      <g fill="${STEEL}" opacity="0.9">
-        <circle cx="180" cy="60" r="3"/><circle cx="270" cy="108" r="3"/><circle cx="90" cy="108" r="3"/>
-        <circle cx="180" cy="226" r="3"/>
-      </g>`),
+      <g fill="${STEEL}">
+        <circle cx="200" cy="60" r="5"/><circle cx="320" cy="128" r="5"/><circle cx="80" cy="128" r="5"/>
+        <circle cx="200" cy="288" r="5"/>
+      </g>`, "0 0 400 340"),
   },
   {
     kicker: "02",
-    title: "The problem",
-    body: `<p>Structure-from-Motion gives camera poses and a few thousand points. A surface needs <strong>every pixel</strong> to vote on where space ends.</p>
-      <p>Three physical conditions decide whether that works: the scene is rigid, the surface has texture, the light is diffuse. All three are measurable failures.</p>`,
-    chips: ["3/82 views when the object moved", "panning registered 16/228", "specular blade: 33 patches"],
+    title: "One pipeline, nine stages",
+    body: `<p>Sparse stages are cheap; dense depth dominates the runtime. Every stage logs its timing and names its failures.</p>`,
+    chips: ["decode → features → match", "verify → tracks → sparse", "dense → fusion → mesh"],
     figure: svg(`
-      <g stroke="${STEEL}" stroke-width="1.2" opacity="0.8">
-        <circle cx="90" cy="70" r="18"/><circle cx="270" cy="70" r="18"/>
+      <g stroke="${GOLD}" stroke-width="1.6" class="flow-line" fill="none">
+        <path d="M14 70h302M14 160h302M14 250h302"/>
+        <path d="M60 92v46M170 92v46M270 92v46M60 182v46M170 182v46M270 182v46"/>
       </g>
-      <path d="M108 82 200 150 252 86" stroke="${GOLD}" stroke-width="1.4" stroke-dasharray="5 5"/>
-      <g fill="${GOLD}">
-        <circle cx="200" cy="150" r="5"/>
-      </g>`),
+      <g font-size="12" font-family="monospace" fill="${INK}" text-anchor="middle">
+        ${[["decode",60,70],["features",170,70],["match",270,70],
+           ["verify",60,160],["tracks",170,160],["sparse",270,160],
+           ["dense",60,250],["fusion",170,250],["mesh",270,250]].map(([n,x,y]) => `
+          <rect x="${x-46}" y="${y-22}" width="92" height="44" rx="8" fill="#0c1a28" stroke="${STEEL}" stroke-width="1.4"/>
+          <text x="${x}" y="${y+4}" fill="${INK}">${n}</text>`).join("")}
+      </g>`, "0 0 360 320"),
   },
   {
     kicker: "03",
-    title: "The pipeline",
-    body: `<p>Nine stages, each with its own log, timing and failure code. Sparse stages are cheap; dense depth dominates the runtime.</p>`,
-    chips: ["decode → features → match → verify → tracks", "sparse → dense → fusion → mesh"],
+    title: "Sparse: where the cameras are",
+    body: `<p>SIFT keypoints, mutual nearest neighbours and epipolar RANSAC, then incremental SfM: PnP registration, triangulation and bundle adjustment.</p>`,
+    chips: ["157k matches", "RMSE 2.0 px", "140 views on the stand clip"],
     figure: svg(`
-      <path d="M30 140h300" stroke="${GOLD}" stroke-width="1.2" class="flow-line"/>
-      <g font-size="9" fill="${INK}" text-anchor="middle">
-        ${["decode","features","match","verify","tracks","sparse","dense","fusion","mesh"]
-          .map((n, i) => `<circle cx="${34 + i * 36.5}" cy="140" r="9" fill="#1b2c3d" stroke="${GOLD}" stroke-width="1.2"/>
-            <text x="${34 + i * 36.5}" y="168" fill="${STEEL}">${i + 1}</text>
-            <text x="${34 + i * 36.5}" y="122" fill="${INK}" font-size="7.5">${n}</text>`)
-          .join("")}
-      </g>`, "0 0 360 210"),
+      <g fill="${GOLD}">${Array.from({length: 40}, (_, i) =>
+        `<circle cx="${120 + (i * 61) % 160}" cy="${80 + (i * 43) % 170}" r="3"/>`).join("")}</g>
+      <g fill="none" stroke="${STEEL}" stroke-width="1.8">
+        <path d="M50 70l40 24-40 24-40-24Z"/><path d="M350 70l40 24-40 24-40-24Z"/>
+        <path d="M50 220l40 24-40 24-40-24Z"/><path d="M350 220l40 24-40 24-40-24Z"/>
+      </g>
+      <g stroke="${GOLD}" stroke-width="1" opacity="0.55" stroke-dasharray="4 7">
+        <path d="M90 94 310 94M90 244 310 94M90 94 310 244"/>
+      </g>`, "0 0 400 340"),
   },
   {
     kicker: "04",
-    title: "Decode and features",
-    body: `<p>Frames are decoded with GStreamer and converted to gray. SIFT finds scale-space extrema with 128-float descriptors; ORB uses FAST corners and 256-bit binary descriptors.</p>
-      <p><strong>Choice:</strong> SIFT for phone orbits, ORB when speed matters more than large viewpoint changes.</p>`,
-    chips: ["23.7k keypoints / 63 frames", "500 features per frame", "SIFT"],
+    title: "Dense: every pixel votes",
+    body: `<p>Inverse-depth planes are swept per view. Census compares intensity orderings, SGM adds a smoothness prior, and sub-pixel refinement sharpens the winner.</p>`,
+    chips: ["median 4–9 % depth error", "SGM fills flat regions"],
     figure: svg(`
-      <g stroke="${STEEL}" stroke-width="1">${Array.from({length: 8}, (_, i) =>
-        `<line x1="${40 + i * 36}" y1="50" x2="${40 + i * 36}" y2="230"/>`).join("")}
-        ${Array.from({length: 5}, (_, i) =>
-        `<line x1="40" y1="${50 + i * 44}" x2="292" y2="${50 + i * 44}"/>`).join("")}
+      <g stroke="${STEEL}" stroke-width="1.6" opacity="0.7">
+        ${[90, 130, 170, 210, 250].map((y) => `<path d="M40 ${y}h320"/>`).join("")}
       </g>
-      <g fill="none" stroke="${GOLD}" stroke-width="1.4">${[[94,94],[203,138],[167,182],[238,94]].map(
-        ([x,y]) => `<circle cx="${x}" cy="${y}" r="7"/><path d="M${x-10} ${y}h20M${x} ${y-10}v20"/>`).join("")}
-      </g>`),
+      <g stroke="${GOLD}" stroke-width="2.2">
+        <path d="M200 300 90 90M200 300 200 90M200 300 310 90"/>
+      </g>
+      <rect x="70" y="120" width="260" height="14" rx="7" fill="${GOLD}" opacity="0.22" stroke="${GOLD}" stroke-width="1.6"/>
+      <circle cx="200" cy="300" r="6" fill="${GOLD}"/>`, "0 0 400 340"),
   },
   {
     kicker: "05",
-    title: "Matching",
-    body: `<p>Three filters, each catching what the last missed: Lowe's ratio rejects ambiguous descriptors, mutual nearest neighbours enforce one-to-one matches, and epipolar RANSAC throws away pairs that violate <strong>x₂ᵀFx₁ = 0</strong>.</p>`,
-    chips: ["21,667 raw matches", "17,170 after RANSAC", "3,780 tracks"],
+    title: "Votes become a surface",
+    body: `<p>TSDF fusion, marching tetrahedra, Taubin and bilateral smoothing, then quadric error metrics spend the face budget where the shape bends.</p>`,
+    chips: ["87k → 22k faces", "20–33 patches", "Euler −97 … −233"],
     figure: svg(`
-      <g stroke="${STEEL}" stroke-width="1.2"><path d="M60 90l40 26-40 26-40-26Z"/><path d="M300 90l40 26-40 26-40-26Z"/></g>
-      <g stroke="${GOLD}" stroke-width="1" opacity="0.85">
-        <line x1="60" y1="116" x2="300" y2="116" stroke-dasharray="4 6"/>
-        <line x1="60" y1="116" x2="300" y2="150"/><line x1="60" y1="116" x2="300" y2="82"/>
+      <g stroke="${STEEL}" stroke-width="1.3" fill="none">
+        ${Array.from({length: 4}, (_, r) => Array.from({length: 4}, (_, c) =>
+          `<path d="M${55 + c * 54 + r * 20} ${70 + r * 46}l54 0 0 46-54 0Z"/>`).join("")).join("")}
       </g>
-      <circle cx="60" cy="116" r="4" fill="${GOLD}"/><circle cx="300" cy="116" r="4" fill="${GOLD}"/>`),
+      <g fill="${GOLD}" font-size="16" font-family="monospace">
+        <text x="96" y="104">+</text><text x="150" y="104">+</text><text x="96" y="150">−</text><text x="150" y="150">−</text>
+      </g>
+      <path d="M95 118 175 138 135 196Z" fill="rgba(216,178,92,.16)" stroke="${GOLD}" stroke-width="2.4"/>
+      <circle cx="95" cy="118" r="4" fill="${GOLD}"/><circle cx="175" cy="138" r="4" fill="${GOLD}"/><circle cx="135" cy="196" r="4" fill="${GOLD}"/>`, "0 0 400 360"),
   },
   {
     kicker: "06",
-    title: "Sparse SfM",
-    body: `<p>An essential-matrix bootstrap fixes the world frame. Each view is registered by PnP inside RANSAC with SPRT early rejection; new points are triangulated and bundle adjustment minimises reprojection error.</p>
-      <p><strong>Built-in honesty:</strong> the reported RMSE is consistency, not truth.</p>`,
-    chips: ["RMSE 2.09 px", "22/63 views", "1,175 points", "up to scale"],
+    title: "Trust is a number",
+    body: `<p>Every run writes a report: mesh-quality pack, provenance hash, resource use and a self-assessment confidence. Failures carry a stable code and hints.</p>`,
+    chips: ["sha256 provenance", "13 failure codes", "confidence 0.55–0.61"],
     figure: svg(`
-      <g fill="${GOLD}">${Array.from({length: 26}, (_, i) =>
-        `<circle cx="${110 + (i * 53) % 150}" cy="${90 + (i * 37) % 120}" r="2.2"/>`).join("")}</g>
-      <g fill="none" stroke="${STEEL}" stroke-width="1.4">
-        <path d="M60 60l30 18-30 18-30-18Z"/><path d="M300 60l30 18-30 18-30-18Z"/>
-        <path d="M60 200l30 18-30 18-30-18Z"/><path d="M300 200l30 18-30 18-30-18Z"/>
-        <path d="M60 78 300 78M60 78 300 218M60 218 300 78" stroke-dasharray="3 6" opacity="0.5"/>
-      </g>`),
+      <g stroke="${STEEL}" stroke-width="6" fill="none" opacity="0.35">
+        <circle cx="200" cy="170" r="90"/>
+      </g>
+      <path d="M200 170 200 90" stroke="${GOLD}" stroke-width="6" stroke-linecap="round"/>
+      <path d="M200 170 252 200" stroke="${GOLD}" stroke-width="6" stroke-linecap="round" opacity="0.7"/>
+      <circle cx="200" cy="170" r="9" fill="${GOLD}"/>
+      <g font-size="13" font-family="monospace" fill="${STEEL}" text-anchor="middle">
+        <text x="200" y="290">quality · provenance · confidence</text>
+      </g>`, "0 0 400 340"),
   },
   {
     kicker: "07",
-    title: "Dense depth",
-    body: `<p>For every registered view, planes of constant inverse depth are swept along the rays. A plane induces a homography; the best photo-consistency wins the pixel.</p>
-      <p>Census compares orderings instead of intensities, and SGM adds a smoothness prior that fills low-texture regions.</p>`,
-    chips: ["median 4.0 % error", "p90 29.4 %", "sub-pixel refined"],
+    title: "What breaks, and why",
+    body: `<p>Specular metal, textureless plastic, panning without parallax, thin one-sided objects. Each failure is detectable before the mesh is.</p>`,
+    chips: ["texture the surface", "texture the support", "second elevation pass"],
     figure: svg(`
-      <g stroke="${STEEL}" stroke-width="1" opacity="0.75">
-        ${Array.from({length: 5}, (_, i) => `<path d="M40 ${70 + i * 34}h280"/>`).join("")}
+      <g stroke="${STEEL}" stroke-width="1.8" fill="none">
+        <rect x="30" y="90" width="100" height="130" rx="10"/>
+        <rect x="150" y="90" width="100" height="130" rx="10"/>
+        <rect x="270" y="90" width="100" height="130" rx="10"/>
       </g>
-      <g stroke="${GOLD}" stroke-width="1.4">
-        <path d="M180 220 90 70M180 220 180 70M180 220 270 70"/>
+      <g stroke="${GOLD}" stroke-width="3">
+        <path d="M45 220 115 100M115 220 45 100"/>
+        <path d="M165 220 235 100M235 220 165 100"/>
+        <path d="M285 220 355 100M355 220 285 100"/>
       </g>
-      <circle cx="180" cy="220" r="4" fill="${GOLD}"/>
-      <path d="M96 104h168" stroke="${GOLD}" stroke-width="2" opacity="0.8"/>`),
+      <g font-size="12" font-family="monospace" fill="${STEEL}" text-anchor="middle">
+        <text x="80" y="250">glossy</text><text x="200" y="250">textureless</text><text x="320" y="250">no parallax</text>
+      </g>`, "0 0 400 340"),
   },
   {
     kicker: "08",
-    title: "Fusion",
-    body: `<p>Each depth map votes: empty in front of the surface, solid behind it. The weighted average is a signed distance field whose zero crossing is the surface.</p>
-      <p>Confidence and view angle weight the votes, so a highlight cannot poison the field.</p>`,
-    chips: ["truncation follows depth noise", "451k observed voxels", "TSDF"],
-    figure: svg(`
-      <g stroke="${STEEL}" stroke-width="1">
-        ${Array.from({length: 4}, (_, r) => Array.from({length: 4}, (_, c) =>
-          `<path d="M${70 + c * 44 + r * 18} ${70 + r * 34}l44 0 0 34-44 0Z"/>`).join("")).join("")}
-      </g>
-      <g fill="${GOLD}" font-size="10" font-family="monospace">
-        <text x="92" y="92">+</text><text x="136" y="92">+</text><text x="92" y="126">−</text><text x="136" y="126">−</text>
-      </g>`),
-  },
-  {
-    kicker: "09",
-    title: "Surface and simplification",
-    body: `<p>Each cube is split into six tetrahedra; the zero crossing becomes triangles with no lookup tables. Small patches are removed, Taubin and bilateral passes de-spike the surface, and quadric error metrics spend the face budget where the shape bends.</p>`,
-    chips: ["101k raw → 87k faces", "33 patches", "Euler −97"],
-    figure: svg(`
-      <g stroke="${STEEL}" stroke-width="1.2" fill="none">
-        <path d="M90 90h140v120H90Z"/><path d="M90 90l50 40 90-40M140 130v80"/>
-      </g>
-      <path d="M90 90 140 130 230 90 90 90Z" fill="rgba(226,200,138,.12)" stroke="${GOLD}" stroke-width="1.6"/>
-      <circle cx="90" cy="90" r="3" fill="${GOLD}"/><circle cx="140" cy="130" r="3" fill="${GOLD}"/><circle cx="230" cy="90" r="3" fill="${GOLD}"/>`),
-  },
-  {
-    kicker: "10",
-    title: "Trust, measured",
-    body: `<p>Every run writes a report: mesh quality, provenance hashes, resource use and a self-assessment. Failures carry a stable code and hints.</p>
-      <p>Determinism is verified per platform; robustness is a curve, not a claim.</p>`,
-    chips: ["sha256 provenance", "quality pack", "13 failure codes", "confidence 0–1"],
-    figure: svg(`
-      <g stroke="${STEEL}" stroke-width="2" fill="none">
-        <circle cx="180" cy="140" r="60" opacity="0.35"/>
-        <circle cx="180" cy="140" r="40" opacity="0.5"/>
-      </g>
-      <path d="M180 140 180 88" stroke="${GOLD}" stroke-width="2.4"/>
-      <path d="M180 140 218 168" stroke="${GOLD}" stroke-width="2.4" opacity="0.8"/>
-      <circle cx="180" cy="140" r="5" fill="${GOLD}"/>
-      <text x="180" y="228" text-anchor="middle" fill="${STEEL}" font-size="10" font-family="monospace">confidence 0.61 · medium</text>`),
-  },
-  {
-    kicker: "11",
-    title: "What fails, and why",
-    body: `<p>Specular metal breaks photo-consistency. Plain white surfaces give NCC nothing to match. Panning without parallax cannot triangulate. Partial orbits leave open shells.</p>
-      <p>Each failure is detectable — the reports and the capture checklist tell you before the mesh does.</p>`,
-    chips: ["specular", "textureless", "no parallax", "partial coverage"],
-    figure: svg(`
-      <g stroke="${STEEL}" stroke-width="1.2" fill="none">
-        <rect x="50" y="80" width="70" height="90" rx="4"/>
-        <rect x="150" y="80" width="70" height="90" rx="4" stroke-dasharray="4 6"/>
-        <rect x="250" y="80" width="70" height="90" rx="4" stroke-dasharray="4 6"/>
-      </g>
-      <g fill="${GOLD}" font-size="9" font-family="monospace" text-anchor="middle">
-        <text x="85" y="192">glossy</text><text x="185" y="192">textureless</text><text x="285" y="192">no parallax</text>
-      </g>`),
-  },
-  {
-    kicker: "12",
     title: "Credits",
-    body: `<p><strong>Adarsh Gupta</strong> — semester project.</p>
-      <p>Built on kornia-rs, three.js, Blender, Open3D and GStreamer. AI-assisted with OpenCode (DeepSeek V4.1 Flash); every number here comes from a measured run.</p>
-      <p><a href="https://github.com/AdarshGuptaa/meshprod" target="_blank" rel="noreferrer" style="color:${GOLD}">github.com/AdarshGuptaa/meshprod</a> · MIT</p>`,
-    chips: ["open source", "MIT", "reproducible"],
+    body: `<p><strong>Adarsh Gupta</strong> · IIIT Gwalior</p>
+      <p>Built on kornia-rs, three.js, Blender, Open3D and GStreamer. MIT. AI-assisted; every number comes from a measured run.</p>`,
+    chips: ["github.com/AdarshGuptaa/meshprod", "MIT", "reproducible"],
     figure: svg(`
-      <g stroke="${GOLD}" stroke-width="1.4" fill="none">
-        <circle cx="180" cy="130" r="52"/>
-        <path d="M180 78v104M128 130h104" opacity="0.4"/>
+      <g stroke="${GOLD}" stroke-width="2" fill="none">
+        <circle cx="200" cy="170" r="86"/><circle cx="200" cy="170" r="60" opacity="0.55"/>
       </g>
-      <text x="180" y="136" text-anchor="middle" fill="${INK}" font-size="22" font-family="monospace">meshprod</text>`),
+      <text x="200" y="178" text-anchor="middle" fill="${INK}" font-size="30" font-family="monospace">meshprod</text>`, "0 0 400 340"),
   },
 ];
 
@@ -1134,6 +1084,8 @@ function firstPaint() {
   resizeViewer();
   const initial = location.hash.replace("#", "");
   if (initial) activateTab(initial);
+  const requestedSlide = Number(new URLSearchParams(location.search).get("slide"));
+  if (requestedSlide > 0) showSlide(requestedSlide - 1);
   document.getElementById("log").textContent = "waiting for a run…";
   const first = SCHEMA[0].items[0];
   openDetails(first);
