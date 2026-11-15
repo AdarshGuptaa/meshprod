@@ -352,6 +352,26 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     if n_frames < 2 {
         return Err(error::PipelineError::NotEnoughFrames { got: n_frames }.into());
     }
+
+    // Portrait/landscape mix-ups are the most common cause of "not enough
+    // views": a swapped principal point barely affects matching but wrecks PnP.
+    let (fw, fh) = (frame_w as f64, frame_h as f64);
+    let (centre_x, centre_y) = (fw * 0.5, fh * 0.5);
+    if (cx - centre_x).abs() > 0.12 * fw || (cy - centre_y).abs() > 0.12 * fh {
+        eprintln!(
+            "  warning: principal point ({cx:.0}, {cy:.0}) is far from the image centre \
+             ({centre_x:.0}, {centre_y:.0}); for a {frame_w}x{frame_h} frame the usual guess \
+             is ({centre_x:.0}, {centre_y:.0}). Did you swap cx/cy between portrait and landscape?"
+        );
+    }
+    let focal = (fx + fy) * 0.5;
+    if focal < 0.3 * fw || focal > 3.0 * fw {
+        eprintln!(
+            "  warning: focal {focal:.0} px is implausible for a {frame_w}x{frame_h} frame; \
+             f_px is roughly 0.7 x the long side ({:.0}) for a phone",
+            fw.max(fh) * 0.7
+        );
+    }
     if n_frames > 200 {
         eprintln!(
             "  warning: {n_frames} frames may make reconstruction slow; consider a larger --frame-step"
@@ -385,6 +405,13 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             .map_err(error::PipelineError::Processing)?
     };
     let total_keypoints: usize = all_features.iter().map(|f| f.n_keypoints()).sum();
+    let average_keypoints = total_keypoints / all_features.len().max(1);
+    if average_keypoints < 80 {
+        eprintln!(
+            "  warning: only {average_keypoints} keypoints per frame; the capture is probably \
+             blurry, out of focus or textureless. Registration and depth will be unreliable."
+        );
+    }
     eprintln!(
         "[2/9] extracted {total_keypoints} keypoints across {} frames in {:.1}s",
         all_features.len(),

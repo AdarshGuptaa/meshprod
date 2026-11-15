@@ -190,6 +190,28 @@ Fairness note: the evaluation set is now four objects (specular knife,
 textureless tube, textured keyboard, thin stand); dark, transparent and
 deformable objects are still unmeasured.
 
+### 2.1h Two new captures: orientation traps and texture limits
+
+Three failure modes were confirmed on the newest clips (`remote.mp4`,
+`tube.mp4`, both **854×480 landscape**):
+
+| Experiment | Result |
+|---|---|
+| remote, whole clip, portrait intrinsics (`cx=240, cy=427`) | **12/151** views registered → low-registration error |
+| remote, whole clip, landscape intrinsics (`cx=427, cy=240`) | **24/150** views |
+| remote, 16–26 s segment, step 3 | **84/84** views, RMSE 2.15 px |
+| tube (white tube), any tested segment | **2/149** views, ~35 SIFT keypoints/frame |
+
+A swapped principal point barely affects descriptor matching but breaks PnP,
+so the visible symptom is "not enough views" rather than a geometric error.
+Most of each clip is panning/wide shots; only a short segment carries real
+parallax. The tube fails for the opposite reason: a white object on a plain red
+table gives the detector almost nothing to track.
+
+The pipeline now warns on both: principal points far from the image centre and
+fewer than 80 keypoints per frame. Both failures are also in the capture-side
+limitations list.
+
 ### 2.2 Repeatability (determinism)
 
 Two independent full runs produced **byte-identical** outputs:

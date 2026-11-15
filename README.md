@@ -352,6 +352,9 @@ Every item below was observed in a measured run; numbers are from
 | Scene suddenly tiny after cropping | `--auto-crop` picked a sub-cluster | drop `--auto-crop` |
 | Blobby Poisson output | incomplete or inconsistent input | do not use Poisson; improve the capture |
 | Warning about fitted distortion | wide-angle lens | keep distortion small or undistort before capture |
+| Few views despite a clean orbit | `cx`/`cy` swapped between a portrait and a landscape clip | pass intrinsics for the decoded frame: `cx = width/2`, `cy = height/2` (the tool now warns) |
+| "<80 keypoints per frame" warning | defocus, motion blur or a textureless scene | refocus, add light/texture, get closer |
+| Dense depth accurate but sparse coverage | small baselines (very small `--frame-step`) | use step 5–10 on 30 fps clips |
 
 ## Roadmap — biggest levers for better meshes
 
