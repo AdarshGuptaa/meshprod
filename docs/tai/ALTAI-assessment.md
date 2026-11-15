@@ -202,12 +202,20 @@ Three failure modes were confirmed on the newest clips (`remote.mp4`,
 | remote, 16–26 s segment, step 3 | **84/84** views, RMSE 2.15 px (dense p90 410 %: baselines too small) |
 | remote, 16–27 s segment, step 5 | **50/66** views, RMSE 1.95 px, depth **4.2 %** median, 768 faces |
 | tube (white tube), any tested segment | **2/91** views, **27 SIFT keypoints/frame** |
+| tag calibration, `apriltag_anchor_test.mp4` (1280×720) | fx **1121.8 px** from 6/46 sampled frames, spread 7.5 % (step 15); fx 1026.5, spread 21.2 % (step 1) |
 
 A swapped principal point barely affects descriptor matching but breaks PnP,
 so the visible symptom is "not enough views" rather than a geometric error.
 Most of each clip is panning/wide shots; only a short segment carries real
 parallax. The tube fails for the opposite reason: a white object on a plain red
 table gives the detector almost nothing to track.
+
+The focal can now be **measured** rather than guessed: `--estimate-focal`
+(and the UI's Calibrate button) detects a printed Tag36h11 tag and applies
+`kornia_calib::estimate_focal` per sampled frame, reporting the median and the
+robust spread. On the tag clip the estimate (1027–1122 px) is stable across
+sampling densities; the spread (7–21 %) is the honest uncertainty, and it is
+printed rather than hidden.
 
 The pipeline now warns on both: principal points far from the image centre and
 fewer than 80 keypoints per frame. Both failures are also in the capture-side

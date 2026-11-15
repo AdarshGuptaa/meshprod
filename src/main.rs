@@ -11,6 +11,8 @@
 //! Every pipeline stage logs its start, progress, and completion time to
 //! stderr so slow stages can be identified.
 
+mod cache;
+mod calibrate;
 mod dense;
 mod dense_sgm;
 mod error;
@@ -37,7 +39,6 @@ use argh::FromArgs;
 use kornia_algebra::Vec3F64;
 use kornia_calib::build_tracks;
 use kornia_image::Image;
-use sha2::{Digest, Sha256};
 
 #[derive(FromArgs)]
 /// Structure-from-Motion from a video file to a simplified triangle mesh.
@@ -246,6 +247,23 @@ struct Args {
     /// bilateral (feature-preserving) smoothing iterations after Taubin
     #[argh(option, default = "2")]
     bilateral_iterations: usize,
+
+    /// directory for the sparse-stage cache (decoded frames + tracks)
+    #[argh(option, default = "PathBuf::from(\".meshprod-cache\")")]
+    cache_dir: PathBuf,
+
+    /// disable the sparse-stage cache (always decode and re-match)
+    #[argh(switch)]
+    no_cache: bool,
+
+    /// estimate the focal length from a printed Tag36h11 tag of this edge
+    /// length in metres, instead of trusting --fx/--fy
+    #[argh(option)]
+    estimate_focal: Option<f64>,
+
+    /// run only the calibration (needs --estimate-focal), print JSON, exit
+    #[argh(switch)]
+    calibrate_only: bool,
 }
 
 /// Validate CLI values that must be positive.
@@ -320,10 +338,6 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         "no input video given".into(),
     ))?;
     let output_path = args.output.clone();
-    let fx = args.fx.ok_or(error::PipelineError::MissingIntrinsics)?;
-    let fy = args.fy.ok_or(error::PipelineError::MissingIntrinsics)?;
-    let cx = args.cx.ok_or(error::PipelineError::MissingIntrinsics)?;
-    let cy = args.cy.ok_or(error::PipelineError::MissingIntrinsics)?;
 
     features::configure_thread_pool(args.threads)?;
     validate_positive_args(args.frame_step, args.match_window)
@@ -331,24 +345,122 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let sprt = build_sprt_config(args.sprt, args.sprt_epsilon, args.sprt_delta)
         .map_err(error::PipelineError::InvalidArgs)?;
 
-    // 1. Decode frames.
+    // 0. Optional camera calibration from a printed AprilTag. The estimate
+    // replaces the guessed focal, so it runs before anything else.
+    let mut predecoded = None;
+    let (fx, fy, cx, cy) = if let Some(tag_size_m) = args.estimate_focal {
+        error::set_stage(1);
+        eprintln!("[calib] estimating focal from a {tag_size_m} m Tag36h11");
+        let t = Instant::now();
+        let (estimate, frames) = calibrate::calibrate(&video_path, args.frame_step, tag_size_m)?;
+        eprintln!(
+            "[calib] fx {:.1} px from {}/{} sampled frames (spread {:.1}%) in {:.1}s",
+            estimate.fx,
+            estimate.detected,
+            estimate.sampled,
+            estimate.spread_pct,
+            t.elapsed().as_secs_f64()
+        );
+        if args.calibrate_only {
+            println!("{}", serde_json::to_string(&estimate)?);
+            return Ok(());
+        }
+        // Reuse these frames for the pipeline: calibration already decoded them.
+        predecoded = Some(frames);
+        (estimate.fx, estimate.fx, estimate.cx, estimate.cy)
+    } else {
+        if args.calibrate_only {
+            return Err(error::PipelineError::InvalidArgs(
+                "--calibrate-only requires --estimate-focal <tag-size-m>".into(),
+            )
+            .into());
+        }
+        (
+            args.fx.ok_or(error::PipelineError::MissingIntrinsics)?,
+            args.fy.ok_or(error::PipelineError::MissingIntrinsics)?,
+            args.cx.ok_or(error::PipelineError::MissingIntrinsics)?,
+            args.cy.ok_or(error::PipelineError::MissingIntrinsics)?,
+        )
+    };
+
+    // Sparse-stage cache: decoded frames (keyed by video + frame step) and
+    // tracks (additionally keyed by the features/matching parameters).
+    let tracks_key = cache::key(&[
+        &format!("{:?}", args.detector),
+        &args.n_features.to_string(),
+        &args.match_window.to_string(),
+        &args.ratio.to_string(),
+        &args.wide_baseline.to_string(),
+        &args.geo_verify.to_string(),
+        &args.geo_threshold.to_string(),
+        &args.geo_min_inliers.to_string(),
+    ]);
+    let cache = if args.no_cache {
+        None
+    } else {
+        match cache::sha256_file(&video_path) {
+            Ok(hash) => Some(cache::SparseCache::new(
+                args.cache_dir.clone(),
+                &hash,
+                args.frame_step,
+                tracks_key,
+            )),
+            Err(e) => {
+                eprintln!("  warning: cannot hash the video ({e}); caching disabled");
+                None
+            }
+        }
+    };
+
+    // 1. Decode frames (or reuse calibrated/cached ones).
     error::set_stage(1);
-    eprintln!("[1/9] reading video: {}", video_path.display());
-    let t = Instant::now();
-    let (rgb_frames, gray_frames) = video::read_frames(&video_path, args.frame_step)
-        .map_err(|e| error::PipelineError::VideoDecode(e.to_string()))?;
+    let (rgb_frames, gray_frames, cached_tracks) = if let Some(frames) = predecoded {
+        let (rgb, gray) = frames;
+        let tracks = cache.as_ref().and_then(|c| c.load_tracks());
+        eprintln!(
+            "[1/9] reusing {} frames decoded for calibration",
+            gray.len()
+        );
+        if let Some(c) = &cache {
+            if let Err(e) = c.store_frames(&rgb, &gray) {
+                eprintln!("  warning: could not write the frames cache: {e}");
+            }
+        }
+        (rgb, gray, tracks)
+    } else if let Some((rgb, gray)) = cache.as_ref().and_then(|c| c.load_frames()) {
+        let tracks = cache.as_ref().and_then(|c| c.load_tracks());
+        let (w, h) = gray
+            .first()
+            .map(|f| (f.width(), f.height()))
+            .unwrap_or((0, 0));
+        eprintln!("[1/9] loaded {} cached frames ({w}x{h})", gray.len());
+        (rgb, gray, tracks)
+    } else {
+        eprintln!("[1/9] reading video: {}", video_path.display());
+        let t = Instant::now();
+        let (rgb, gray) = video::read_frames(&video_path, args.frame_step)
+            .map_err(|e| error::PipelineError::VideoDecode(e.to_string()))?;
+        let (w, h) = gray
+            .first()
+            .map(|f| (f.width(), f.height()))
+            .unwrap_or((0, 0));
+        eprintln!(
+            "[1/9] decoded {} frames ({w}x{h}) in {:.1}s",
+            gray.len(),
+            t.elapsed().as_secs_f64()
+        );
+        if let Some(c) = &cache {
+            if let Err(e) = c.store_frames(&rgb, &gray) {
+                eprintln!("  warning: could not write the frames cache: {e}");
+            }
+        }
+        (rgb, gray, None)
+    };
     let n_frames = gray_frames.len();
-    let (frame_w, frame_h) = rgb_frames
+    let (frame_w, frame_h) = gray_frames
         .first()
         .map(|f| (f.width(), f.height()))
         .unwrap_or((0, 0));
-    eprintln!(
-        "[1/9] decoded {} frames ({}x{}) in {:.1}s",
-        n_frames,
-        frame_w,
-        frame_h,
-        t.elapsed().as_secs_f64()
-    );
     if n_frames < 2 {
         return Err(error::PipelineError::NotEnoughFrames { got: n_frames }.into());
     }
@@ -378,135 +490,28 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         );
     }
 
-    // 2. Extract features per frame (parallel via rayon; sequential for CUDA).
-    // --cuda only affects SIFT; ignore it for the CPU-only ORB detector.
-    let use_cuda = args.cuda && args.detector == features::DetectorKind::Sift;
-    if args.cuda && !use_cuda {
-        eprintln!(
-            "  warning: --cuda only applies to SIFT; ignoring it for {:?}",
-            args.detector
-        );
-    }
-    error::set_stage(2);
-    eprintln!("[2/9] extracting features with {:?}", args.detector);
-    if use_cuda {
-        eprintln!("[2/9] CUDA SIFT extraction (device 0)");
-    }
-    let t = Instant::now();
-    let extractor = features::make_extractor(args.detector, args.n_features, use_cuda)?;
-    // CUDA shares one device stream, so extraction must be sequential.
-    let all_features = if use_cuda {
-        gray_frames
-            .iter()
-            .map(|frame| extractor.extract(frame))
-            .collect::<Result<_, _>>()?
-    } else {
-        features::extract_features_parallel(&gray_frames, extractor.as_ref())
-            .map_err(error::PipelineError::Processing)?
-    };
-    let total_keypoints: usize = all_features.iter().map(|f| f.n_keypoints()).sum();
-    let average_keypoints = total_keypoints / all_features.len().max(1);
-    if average_keypoints < 80 {
-        eprintln!(
-            "  warning: only {average_keypoints} keypoints per frame; the capture is probably \
-             blurry, out of focus or textureless. Registration and depth will be unreliable."
-        );
-    }
-    eprintln!(
-        "[2/9] extracted {total_keypoints} keypoints across {} frames in {:.1}s",
-        all_features.len(),
-        t.elapsed().as_secs_f64()
-    );
-    // Gray frames stay resident for the dense stage; RGB frames for sampling
-    // colours and dense texturing.
-
-    // Device SIFT matcher (only when descriptors are CUDA-resident), sized to
-    // the largest descriptor set so no pair can exceed its capacity.
-    let cuda_matcher = if use_cuda {
-        Some(features::CudaSiftMatcher::new(
-            features::max_sift_descriptors(&all_features),
-        )?)
-    } else {
-        None
-    };
-
-    // 3. Match frames in a sliding window (parallel via rayon).
-    error::set_stage(3);
-    eprintln!("[3/9] matching frames (window={})", args.match_window);
-    let t = Instant::now();
-    let mut edges = matching::match_pairs_parallel(
-        &all_features,
-        args.match_window,
-        args.ratio,
-        cuda_matcher.as_ref(),
-    )
-    .map_err(error::PipelineError::Processing)?;
-    eprintln!(
-        "[3/9] found {} matched correspondences in {:.1}s",
-        edges.len(),
-        t.elapsed().as_secs_f64()
-    );
-
-    // 3.25. Optional: wide-baseline matching (long jumps beyond the window).
-    if args.wide_baseline > 0 {
-        eprintln!(
-            "[3/9] wide-baseline matching (stride={})",
-            args.wide_baseline
-        );
-        let t = Instant::now();
-        let added = matching::append_wide_baseline_edges(
-            &all_features,
-            args.match_window,
-            args.wide_baseline,
-            args.ratio,
-            cuda_matcher.as_ref(),
-            &mut edges,
-        )?;
-        eprintln!(
-            "[3/9] added {added} wide-baseline matches in {:.1}s",
-            t.elapsed().as_secs_f64()
-        );
-    }
-
-    // 3.5. Optional: geometric verification (epipolar RANSAC) to reject false matches.
-    let edges = if args.geo_verify {
-        error::set_stage(4);
-        eprintln!(
-            "[3.5/9] geometric verification (threshold={} px, min_inliers={})",
-            args.geo_threshold, args.geo_min_inliers
-        );
-        if let Some(w) = matching::min_inliers_warning(args.geo_min_inliers) {
-            eprintln!("  {w}");
+    // 2-4. Features, matches and tracks (or reuse the cached ones).
+    let tracks = match cached_tracks {
+        Some(tracks) => {
+            eprintln!(
+                "[2/9] reusing cached features/matches: {} tracks",
+                tracks.len()
+            );
+            for stage in 2..=5 {
+                error::progress(stage, 1, 1);
+            }
+            tracks
         }
-        let t = Instant::now();
-        let before = edges.len();
-        let edges = matching::verify_matches_geometrically(
-            &edges,
-            args.geo_threshold,
-            args.geo_min_inliers,
-        );
-        eprintln!(
-            "[3.5/9] filtered {before} -> {} matches in {:.1}s",
-            edges.len(),
-            t.elapsed().as_secs_f64()
-        );
-        error::progress(4, 1, 1);
-        edges
-    } else {
-        edges
+        None => {
+            let tracks = sparse_tracks(&args, &gray_frames)?;
+            if let Some(c) = &cache {
+                if let Err(e) = c.store_tracks(&tracks) {
+                    eprintln!("  warning: could not write the tracks cache: {e}");
+                }
+            }
+            tracks
+        }
     };
-
-    // 4. Chain matches into multi-view tracks.
-    error::set_stage(5);
-    eprintln!("[4/9] building tracks");
-    let t = Instant::now();
-    let tracks = build_tracks(&edges);
-    eprintln!(
-        "[4/9] built {} tracks in {:.1}s",
-        tracks.len(),
-        t.elapsed().as_secs_f64()
-    );
-    error::progress(5, 1, 1);
 
     // Sample every raw observation's colour now; RGB frames stay resident for
     // the dense stage's texturing.
@@ -973,7 +978,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         },
         "mesh_quality": quality,
         "provenance": {
-            "video_sha256": sha256_file(&video_path).unwrap_or_default(),
+            "video_sha256": cache::sha256_file(&video_path).unwrap_or_default(),
             "args": std::env::args().collect::<Vec<_>>().join(" "),
             "version": env!("CARGO_PKG_VERSION"),
         },
@@ -996,19 +1001,142 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
 }
 
 /// SHA-256 of a file, for provenance.
-fn sha256_file(path: &Path) -> std::io::Result<String> {
-    use std::io::Read;
-    let mut file = std::fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 65536];
-    loop {
-        let n = file.read(&mut buffer)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buffer[..n]);
+/// Extract features, match them in a sliding window and chain the matches into
+/// multi-view tracks (the sparse stage's front half).
+fn sparse_tracks(
+    args: &Args,
+    gray_frames: &[Image<u8, 1>],
+) -> Result<Vec<kornia_calib::FeatureTrack>, Box<dyn Error>> {
+    // 2. Extract features per frame (parallel via rayon; sequential for CUDA).
+    // --cuda only affects SIFT; ignore it for the CPU-only ORB detector.
+    let use_cuda = args.cuda && args.detector == features::DetectorKind::Sift;
+    if args.cuda && !use_cuda {
+        eprintln!(
+            "  warning: --cuda only applies to SIFT; ignoring it for {:?}",
+            args.detector
+        );
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    error::set_stage(2);
+    eprintln!("[2/9] extracting features with {:?}", args.detector);
+    if use_cuda {
+        eprintln!("[2/9] CUDA SIFT extraction (device 0)");
+    }
+    let t = Instant::now();
+    let extractor = features::make_extractor(args.detector, args.n_features, use_cuda)?;
+    // CUDA shares one device stream, so extraction must be sequential.
+    let all_features = if use_cuda {
+        gray_frames
+            .iter()
+            .map(|frame| extractor.extract(frame))
+            .collect::<Result<_, _>>()?
+    } else {
+        features::extract_features_parallel(gray_frames, extractor.as_ref())
+            .map_err(error::PipelineError::Processing)?
+    };
+    let total_keypoints: usize = all_features.iter().map(|f| f.n_keypoints()).sum();
+    let average_keypoints = total_keypoints / all_features.len().max(1);
+    if average_keypoints < 80 {
+        eprintln!(
+            "  warning: only {average_keypoints} keypoints per frame; the capture is probably \
+             blurry, out of focus or textureless. Registration and depth will be unreliable."
+        );
+    }
+    eprintln!(
+        "[2/9] extracted {total_keypoints} keypoints across {} frames in {:.1}s",
+        all_features.len(),
+        t.elapsed().as_secs_f64()
+    );
+    // Gray frames stay resident for the dense stage; RGB frames for sampling
+    // colours and dense texturing.
+
+    // Device SIFT matcher (only when descriptors are CUDA-resident), sized to
+    // the largest descriptor set so no pair can exceed its capacity.
+    let cuda_matcher = if use_cuda {
+        Some(features::CudaSiftMatcher::new(
+            features::max_sift_descriptors(&all_features),
+        )?)
+    } else {
+        None
+    };
+
+    // 3. Match frames in a sliding window (parallel via rayon).
+    error::set_stage(3);
+    eprintln!("[3/9] matching frames (window={})", args.match_window);
+    let t = Instant::now();
+    let mut edges = matching::match_pairs_parallel(
+        &all_features,
+        args.match_window,
+        args.ratio,
+        cuda_matcher.as_ref(),
+    )
+    .map_err(error::PipelineError::Processing)?;
+    eprintln!(
+        "[3/9] found {} matched correspondences in {:.1}s",
+        edges.len(),
+        t.elapsed().as_secs_f64()
+    );
+
+    // 3.25. Optional: wide-baseline matching (long jumps beyond the window).
+    if args.wide_baseline > 0 {
+        eprintln!(
+            "[3/9] wide-baseline matching (stride={})",
+            args.wide_baseline
+        );
+        let t = Instant::now();
+        let added = matching::append_wide_baseline_edges(
+            &all_features,
+            args.match_window,
+            args.wide_baseline,
+            args.ratio,
+            cuda_matcher.as_ref(),
+            &mut edges,
+        )?;
+        eprintln!(
+            "[3/9] added {added} wide-baseline matches in {:.1}s",
+            t.elapsed().as_secs_f64()
+        );
+    }
+
+    // 3.5. Optional: geometric verification (epipolar RANSAC) to reject false matches.
+    let edges = if args.geo_verify {
+        error::set_stage(4);
+        eprintln!(
+            "[3.5/9] geometric verification (threshold={} px, min_inliers={})",
+            args.geo_threshold, args.geo_min_inliers
+        );
+        if let Some(w) = matching::min_inliers_warning(args.geo_min_inliers) {
+            eprintln!("  {w}");
+        }
+        let t = Instant::now();
+        let before = edges.len();
+        let edges = matching::verify_matches_geometrically(
+            &edges,
+            args.geo_threshold,
+            args.geo_min_inliers,
+        );
+        eprintln!(
+            "[3.5/9] filtered {before} -> {} matches in {:.1}s",
+            edges.len(),
+            t.elapsed().as_secs_f64()
+        );
+        error::progress(4, 1, 1);
+        edges
+    } else {
+        edges
+    };
+
+    // 4. Chain matches into multi-view tracks.
+    error::set_stage(5);
+    eprintln!("[4/9] building tracks");
+    let t = Instant::now();
+    let tracks = build_tracks(&edges);
+    eprintln!(
+        "[4/9] built {} tracks in {:.1}s",
+        tracks.len(),
+        t.elapsed().as_secs_f64()
+    );
+    error::progress(5, 1, 1);
+    Ok(tracks)
 }
 
 /// Peak resident set size in KiB (0 where unsupported).

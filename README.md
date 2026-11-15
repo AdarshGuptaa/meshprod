@@ -149,6 +149,9 @@ these captures, so it stays opt-in.
 | Flag | Meaning |
 |---|---|
 | `--fx/--fy/--cx/--cy` | pinhole intrinsics in pixels (required) |
+| `--estimate-focal <m>` | measure the focal length from a printed Tag36h11 tag of this edge length |
+| `--calibrate-only` | print the calibration estimate as JSON and exit |
+| `--cache-dir <dir>` / `--no-cache` | sparse-stage cache location (default `.meshprod-cache`) / disable it |
 | `--detector orb\|sift` | feature detector |
 | `--frame-step N` | keep every Nth frame (10 works well for orbit clips) |
 | `--geo-verify` | RANSAC epipolar verification |
@@ -176,6 +179,21 @@ these captures, so it stays opt-in.
 Intrinsics from a phone: `f_px = f_35mm / 36 * frame_width`, principal point at
 the image centre. Portrait clips are often decoded *unrotated* — use the
 intrinsics of the decoded frame.
+
+## Sparse-stage cache and calibration
+
+Decoded frames and multi-view tracks are cached on disk. Re-running with only
+dense/mesh changes skips decode, matching and tracking: on an 11 s clip, 43 s
+becomes 13 s. `--frame-step` keys the frames entry; the feature/matching knobs
+key the tracks entry; `--no-cache` disables both. The web UI caches under
+`web_runs/cache`.
+
+`--estimate-focal <tag-size-m>` measures the focal length instead of guessing
+it: Tag36h11 detection (`kornia-apriltag`) feeds `kornia_calib::estimate_focal`,
+and the median over sampled frames is used (the spread is printed). The web
+UI's **Calibrate** button runs the same pass and fills `fx/fy/cx/cy`.
+Calibration removes the single largest error source on phone captures: a
+guessed focal.
 
 ## Layout
 

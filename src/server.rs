@@ -201,6 +201,7 @@ pub fn serve(port: u16) -> Result<(), Box<dyn std::error::Error>> {
             .route("/api/history", get(history))
             .route("/api/diagnostics", get(diagnostics))
             .route("/api/run", post(run))
+            .route("/api/calibrate", post(calibrate))
             .route("/api/mesh/{kind}", get(mesh))
             .fallback_service(tower_http::services::ServeDir::new("web"))
             .layer(DefaultBodyLimit::max(4 * 1024 * 1024 * 1024))
@@ -518,6 +519,98 @@ async fn run(
     Ok(Json(serde_json::json!({ "started": true })))
 }
 
+/// Estimate the focal length from a printed Tag36h11 tag.
+///
+/// Uploads a short clip, runs the CLI's `--calibrate-only` mode and returns its
+/// JSON estimate; the UI fills `fx/fy/cx/cy` with it. The clip is temporary.
+async fn calibrate(
+    State(app): State<App>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let path = app.dir.join(format!("calib-{stamp}.mp4"));
+    let mut tag_size_m = 0.1_f64;
+    let mut written = false;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
+    {
+        match field.name() {
+            Some("video") => {
+                let mut file = tokio::fs::File::create(&path)
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                let mut field = field;
+                while let Some(chunk) = field
+                    .chunk()
+                    .await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
+                {
+                    tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+                        .await
+                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                }
+                tokio::io::AsyncWriteExt::flush(&mut file)
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                written = true;
+            }
+            Some("tag_size_m") => {
+                let text = field
+                    .text()
+                    .await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+                tag_size_m = text
+                    .trim()
+                    .parse()
+                    .map_err(|_| (StatusCode::BAD_REQUEST, "invalid tag size".into()))?;
+            }
+            _ => {}
+        }
+    }
+    if !written {
+        return Err((StatusCode::BAD_REQUEST, "no video uploaded".into()));
+    }
+
+    let exe =
+        std::env::current_exe().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let video = path.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(exe)
+            .arg(&video)
+            .args(["--estimate-focal", &tag_size_m.to_string()])
+            .args(["--calibrate-only", "--frame-step", "5"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let _ = std::fs::remove_file(&path);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err((
+            StatusCode::BAD_REQUEST,
+            stderr
+                .lines()
+                .last()
+                .unwrap_or("calibration failed")
+                .trim_start_matches("error: ")
+                .to_string(),
+        ));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let estimate: serde_json::Value = serde_json::from_str(text.trim())
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(estimate))
+}
+
 async fn mesh(
     State(app): State<App>,
     UrlPath(kind): UrlPath<String>,
@@ -557,6 +650,7 @@ fn build_args(c: &Config) -> Vec<String> {
         a.push(k.to_string());
         a.push(v);
     };
+    opt("--cache-dir", "web_runs/cache".into());
     opt("--fx", c.fx.to_string());
     opt("--fy", c.fy.to_string());
     opt("--cx", c.cx.to_string());

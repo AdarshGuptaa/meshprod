@@ -118,10 +118,10 @@ for (const group of SCHEMA) {
 }
 
 const PRESETS = {
-  fast: { frame_step: 20, dense_scale: 0.35, dense_planes: 64, voxel_resolution: 192, target_faces: 20000 },
-  balanced: {},
-  quality: { frame_step: 5, dense_scale: 0.75, dense_planes: 128, voxel_resolution: 320, target_faces: 80000 },
-  auto: { auto_config: true },
+  fast: { ...DEFAULT_CONFIG, frame_step: 20, dense_scale: 0.35, dense_planes: 64, voxel_resolution: 192, target_faces: 20000 },
+  balanced: { ...DEFAULT_CONFIG },
+  quality: { ...DEFAULT_CONFIG, frame_step: 5, dense_scale: 0.75, dense_planes: 128, voxel_resolution: 320, target_faces: 80000 },
+  auto: { ...DEFAULT_CONFIG, auto_config: true },
 };
 
 const ALTAI = [
@@ -180,10 +180,58 @@ function renderGroups() {
     grid.className = "slot-grid";
     for (const item of group.items) grid.appendChild(slotEl(item));
     details.appendChild(grid);
+    if (group.title === "Camera") details.appendChild(calibrationRow());
     host.appendChild(details);
   }
   if (selectedKey) {
     document.querySelectorAll(".slot").forEach((s) => s.classList.toggle("selected", s.dataset.key === selectedKey));
+  }
+}
+
+function calibrationRow() {
+  const wrap = document.createElement("div");
+  wrap.className = "calib";
+  wrap.innerHTML = `
+    <label class="calib-size">Tag edge (mm)
+      <input id="tag-size" type="number" min="10" max="500" step="1" value="100">
+    </label>
+    <button class="ghost" id="calibrate-button" type="button"><svg class="icon"><use href="#i-check"/></svg>Calibrate</button>
+    <p class="hint" id="calib-note">Print a Tag36h11 tag, film it flat and slightly tilted, then calibrate to measure fx instead of guessing it.</p>`;
+  wrap.querySelector("#calibrate-button").addEventListener("click", calibrate);
+  return wrap;
+}
+
+async function calibrate() {
+  const button = document.getElementById("calibrate-button");
+  const note = document.getElementById("calib-note");
+  if (!videoFile) {
+    note.textContent = "Choose a video first.";
+    return;
+  }
+  const mm = Number(document.getElementById("tag-size").value);
+  if (!(mm > 0)) {
+    note.textContent = "Enter the tag's edge length in millimetres.";
+    return;
+  }
+  button.disabled = true;
+  note.textContent = "Detecting the tag and estimating the focal length…";
+  const fd = new FormData();
+  fd.append("video", videoFile, videoFile.name);
+  fd.append("tag_size_m", String(mm / 1000));
+  try {
+    const res = await fetch("/api/calibrate", { method: "POST", body: fd });
+    if (!res.ok) throw new Error(await res.text());
+    const est = await res.json();
+    config.fx = est.fx;
+    config.fy = est.fx;
+    config.cx = est.cx;
+    config.cy = est.cy;
+    renderGroups();
+    document.getElementById("calib-note").textContent =
+      `fx = ${est.fx.toFixed(1)} px from ${est.detected}/${est.sampled} frames (spread ${est.spread_pct.toFixed(1)}%).`;
+  } catch (err) {
+    note.textContent = `calibration failed: ${err.message}`;
+    button.disabled = false;
   }
 }
 
@@ -271,7 +319,7 @@ document.querySelectorAll("[data-preset]").forEach((btn) => {
   btn.addEventListener("click", () => {
     document.querySelectorAll("[data-preset]").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
-    Object.assign(config, PRESETS[btn.dataset.preset] || {});
+    config = { ...(PRESETS[btn.dataset.preset] || DEFAULT_CONFIG) };
     renderGroups();
     const item = SCHEMA.flatMap((g) => g.items).find((i) => i.key === selectedKey);
     if (item) openDetails(item);

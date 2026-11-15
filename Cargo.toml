@@ -15,6 +15,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
 tower-http = { version = "0.6", features = ["fs"] }
 cudarc = "0.19"
 kiddo = "5.3"
+kornia-apriltag = { git = "https://github.com/AdarshGuptaa/kornia-rs.git", branch = "semproj/sfm2mesh" }
 kornia-3d = { git = "https://github.com/AdarshGuptaa/kornia-rs.git", branch = "semproj/sfm2mesh" }
 kornia-algebra = { git = "https://github.com/AdarshGuptaa/kornia-rs.git", branch = "semproj/sfm2mesh" }
 kornia-calib = { git = "https://github.com/AdarshGuptaa/kornia-rs.git", branch = "semproj/sfm2mesh" }

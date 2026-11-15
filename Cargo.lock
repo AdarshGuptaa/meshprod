@@ -1370,6 +1370,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "kornia-apriltag"
+version = "0.2.0"
+source = "git+https://github.com/AdarshGuptaa/kornia-rs.git?branch=semproj%2Fsfm2mesh#9c4a064cd431c9425a994ad98d68f33eb3d76482"
+dependencies = [
+ "kornia-3d",
+ "kornia-algebra",
+ "kornia-image",
+ "kornia-imgproc",
+ "rayon",
+ "rustc-hash",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "kornia-calib"
 version = "0.2.0"
 source = "git+https://github.com/AdarshGuptaa/kornia-rs.git?branch=semproj%2Fsfm2mesh#9c4a064cd431c9425a994ad98d68f33eb3d76482"
@@ -2203,6 +2217,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "rustc-hash"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
+
+[[package]]
 name = "rustix"
 version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2348,6 +2368,7 @@ dependencies = [
  "kiddo",
  "kornia-3d",
  "kornia-algebra",
+ "kornia-apriltag",
  "kornia-calib",
  "kornia-image",
  "kornia-imgproc",

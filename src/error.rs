@@ -53,6 +53,8 @@ pub enum PipelineError {
     EmptyMesh,
     /// Cleanup removed every patch.
     MeshPruned,
+    /// Camera calibration found no usable AprilTag view.
+    CalibrationFailed(String),
     /// `--cuda` requested but no device is usable.
     CudaUnavailable(String),
     /// A stage failed for a reason without a more specific classification.
@@ -80,6 +82,7 @@ impl PipelineError {
             PipelineError::EmptyCloud => "empty-cloud",
             PipelineError::EmptyMesh => "empty-mesh",
             PipelineError::MeshPruned => "mesh-pruned",
+            PipelineError::CalibrationFailed(_) => "calibration-failed",
             PipelineError::CudaUnavailable(_) => "cuda-unavailable",
             PipelineError::Processing(_) => "processing-error",
             PipelineError::Io { .. } => "io-error",
@@ -131,6 +134,11 @@ impl PipelineError {
                 "Lower --min-component-faces.",
                 "The surface is fragmented; try --cost sgm or a better capture.",
             ],
+            PipelineError::CalibrationFailed(_) => vec![
+                "Print a Tag36h11 tag and pass its edge length in metres (--estimate-focal 0.1).",
+                "Keep the tag flat, in focus and filling a good part of the frame.",
+                "Avoid fronto-parallel views: tilt the tag so the homography constrains the focal.",
+            ],
             PipelineError::CudaUnavailable(_) => vec![
                 "Run without --cuda (the CPU path is fully supported).",
                 "Install an NVIDIA driver and the CUDA runtime if the GPU is intended.",
@@ -179,6 +187,9 @@ impl fmt::Display for PipelineError {
                 write!(f, "the TSDF produced no surface (empty zero level set)")
             }
             PipelineError::MeshPruned => write!(f, "cleanup removed every mesh patch"),
+            PipelineError::CalibrationFailed(m) => {
+                write!(f, "camera calibration failed: {m}")
+            }
             PipelineError::CudaUnavailable(m) => write!(f, "CUDA is unavailable: {m}"),
             PipelineError::Processing(m) => write!(f, "pipeline stage failed: {m}"),
             PipelineError::Io { path, message } => write!(f, "I/O error at {path}: {message}"),
@@ -204,6 +215,7 @@ pub fn catalogue() -> Vec<serde_json::Value> {
         PipelineError::EmptyCloud,
         PipelineError::EmptyMesh,
         PipelineError::MeshPruned,
+        PipelineError::CalibrationFailed(String::new()),
         PipelineError::CudaUnavailable(String::new()),
         PipelineError::Processing(String::new()),
         PipelineError::Io {
@@ -267,6 +279,7 @@ mod tests {
             PipelineError::EmptyCloud,
             PipelineError::EmptyMesh,
             PipelineError::MeshPruned,
+            PipelineError::CalibrationFailed("x".into()),
             PipelineError::CudaUnavailable("x".into()),
             PipelineError::Processing("x".into()),
             PipelineError::Io {
