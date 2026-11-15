@@ -34,10 +34,9 @@ Requirements: Rust 1.89+, GStreamer 1.20+ with `libav` or `nvcodec` for
 HEVC/H.265 phone video.
 
 ```bash
-# path dependencies point at the local kornia-rs worktree (branch semproj/sfm2mesh)
 cargo build --release
 
-./target/release/sfm2mesh <video.mp4> out/mesh.ply \
+./target/release/sfm2mesh <video.mp4> --output out/mesh.ply \
     --fx 895 --fy 895 --cx 640 --cy 360 \
     --detector sift --n-features 500 --frame-step 10 \
     --geo-verify --sprt
@@ -52,6 +51,31 @@ Outputs next to `out/mesh.ply`:
 | `mesh_cloud.ply` | voxel-downsampled dense point cloud |
 
 Open them in MeshLab, CloudCompare, Blender or Open3D.
+
+## Web UI
+
+```bash
+./target/release/sfm2mesh --serve --port 8080   # run from the repo root
+# open http://127.0.0.1:8080
+```
+
+A game-HUD console (deep navy glass, steel blue, gold): drag-and-drop a video,
+watch the nine pipeline stages with **live per-stage progress bars**, orbit the
+mesh in a three.js viewer, and tune the pipeline through an **inventory of
+slots** — hover any slot and the **inspector** explains it, with the editable
+control and reset-to-default.
+
+The viewer has a **camera panel** (orbit, pan, zoom in/out, reset,
+front/top/side, fit, auto-rotate), mouse and keyboard control, and a
+**fullscreen** viewfinder. Material presets: colour, clay, normals, height,
+wireframe, x-ray. The Trust tab carries metric cards, run-history charts
+(four seeded captures), EU ALTAI cards, the failure catalogue and config
+export. **Guide** explains every setting. **Slides** is an 8-slide,
+graphics-first deck (arrow keys, space, dots, `?slide=N` deep links, present
+mode). Everything binds to `127.0.0.1`; runs stay in `web_runs/`.
+
+![Studio](docs/ui/studio.png)
+![Slides](docs/ui/slides.png)
 
 ### Poisson comparison backend (Open3D)
 
