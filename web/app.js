@@ -137,7 +137,7 @@ const ALTAI = [
 const SEED_HISTORY = [
   { name: "swiss_knife", faces: 86971, depth_median: 4.0, patches: 33, views: 22 },
   { name: "lip_balm", faces: 19581, depth_median: 14.8, patches: 41, views: 66 },
-  { name: "remote", faces: 22297, depth_median: 18.8, patches: 65, views: 84 },
+  { name: "remote", faces: 768, depth_median: 4.2, patches: 2, views: 50 },
   { name: "phone_stand", faces: 21925, depth_median: 9.1, patches: 20, views: 140 },
   { name: "keyboard", faces: 4880, depth_median: 4.5, patches: 4, views: 63 },
 ];

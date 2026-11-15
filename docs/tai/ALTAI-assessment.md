@@ -199,8 +199,9 @@ Three failure modes were confirmed on the newest clips (`remote.mp4`,
 |---|---|
 | remote, whole clip, portrait intrinsics (`cx=240, cy=427`) | **12/151** views registered → low-registration error |
 | remote, whole clip, landscape intrinsics (`cx=427, cy=240`) | **24/150** views |
-| remote, 16–26 s segment, step 3 | **84/84** views, RMSE 2.15 px |
-| tube (white tube), any tested segment | **2/149** views, ~35 SIFT keypoints/frame |
+| remote, 16–26 s segment, step 3 | **84/84** views, RMSE 2.15 px (dense p90 410 %: baselines too small) |
+| remote, 16–27 s segment, step 5 | **50/66** views, RMSE 1.95 px, depth **4.2 %** median, 768 faces |
+| tube (white tube), any tested segment | **2/91** views, **27 SIFT keypoints/frame** |
 
 A swapped principal point barely affects descriptor matching but breaks PnP,
 so the visible symptom is "not enough views" rather than a geometric error.
@@ -211,6 +212,12 @@ table gives the detector almost nothing to track.
 The pipeline now warns on both: principal points far from the image centre and
 fewer than 80 keypoints per frame. Both failures are also in the capture-side
 limitations list.
+
+**Self-assessment gap (recorded):** the step-5 remote run reports confidence
+0.77 ("high") because its depth error and view coverage are good, yet the mesh
+covers only 768 faces — the heuristic does not weigh reconstructed *surface
+extent*. Self-assessment is a consistency signal, not a guarantee of
+completeness; this run is the counter-example.
 
 ### 2.2 Repeatability (determinism)
 
