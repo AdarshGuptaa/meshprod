@@ -309,8 +309,8 @@ Every item below was observed in a measured run; numbers are from
 
 18. **No metric ground truth.** Object dimensions were never compared against
     a ruler or GT mesh (AprilTag anchoring skipped by decision).
-19. **Fairness sample is tiny.** Three objects (specular, textureless, textured
-    box); no matte/curved/dark/thin coverage yet.
+19. **Fairness sample is small.** Four objects (specular, textureless, textured
+    box, thin plastic stand); no dark, transparent or deformable coverage yet.
 20. **Determinism scope.** Byte-identical reruns verified for the default and
     auto-config paths; not every flag combination.
 21. **Pinned dependency.** Builds against the `semproj/sfm2mesh` branch of the

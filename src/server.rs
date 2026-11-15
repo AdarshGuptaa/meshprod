@@ -239,6 +239,18 @@ fn seed_history() -> Vec<RunSummary> {
             cost: "sgm".into(),
         },
         RunSummary {
+            name: "phone_stand".into(),
+            views: 140,
+            points: 2656,
+            rmse: 2.012,
+            depth_median: 9.1,
+            faces: 21925,
+            patches: 20,
+            euler: -233,
+            closed: false,
+            cost: "sgm".into(),
+        },
+        RunSummary {
             name: "keyboard".into(),
             views: 63,
             points: 1077,

@@ -163,6 +163,33 @@ self-assessment with the actual outcome. `scripts/tai_metrics.sh` adds a
 controlled perturbation suite (resolution, blur, noise, frame drop) so
 robustness is measured as a curve rather than asserted.
 
+### 2.1g Phone stand (thin object on a uniform table)
+
+`stand.mp4` (480×854, 30 fps, 63 s) is a foldable plastic phone stand on a
+red table. The final ~23 s orbit registers **140/380 views** (sparse RMSE
+2.01 px, 2,656 points). Auto-config measured texture 0.027 → **SGM**.
+
+| Metric | Value |
+|---|---|
+| Dense depth vs sparse | median **9.1 %**, p90 76.3 % |
+| Dense points after plane removal | 325,730 (3.1 M tabletop points removed) |
+| Raw mesh | 188,677 faces, 673 patches |
+| After cleanup / QEM | **21,925 faces, 20 patches**, Euler −233 |
+| Mesh quality | boundary-edge ratio **42.7 %**, needle fraction 13.8 %, open |
+| Self-assessment | 0.55 (medium) |
+| Resources | 194 s, **peak RSS 2.9 GB** (140 SGM views) |
+
+The stand is thin, matte and lies on a textureless table: SGM reconstructs the
+table as a smooth sheet, plane removal strips most of it but leaves residue,
+and the visible stand surface is one-sided. This is the fourth capture and the
+clearest demonstration that **thin objects need a second elevation pass and a
+textured support**; it also raises a resource point — 140 registered views with
+SGM cost volumes peak near 3 GB, recorded in the report.
+
+Fairness note: the evaluation set is now four objects (specular knife,
+textureless tube, textured keyboard, thin stand); dark, transparent and
+deformable objects are still unmeasured.
+
 ### 2.2 Repeatability (determinism)
 
 Two independent full runs produced **byte-identical** outputs:
