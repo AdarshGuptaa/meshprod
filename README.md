@@ -150,6 +150,7 @@ these captures, so it stays opt-in.
 |---|---|
 | `--fx/--fy/--cx/--cy` | pinhole intrinsics in pixels (required) |
 | `--estimate-focal <m>` | measure the focal length from a printed Tag36h11 tag of this edge length |
+| `--scale-tag <m>` | anchor metric scale from an in-scene Tag36h11 of this edge length (default: up-to-scale) |
 | `--calibrate-only` | print the calibration estimate as JSON and exit |
 | `--cache-dir <dir>` / `--no-cache` | sparse-stage cache location (default `.meshprod-cache`) / disable it |
 | `--detector orb\|sift` | feature detector |

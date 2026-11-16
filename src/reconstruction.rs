@@ -10,7 +10,9 @@ use std::sync::Arc;
 
 use kornia_3d::camera::PinholeCamera;
 use kornia_3d::ransac::SPRTConfig;
-use kornia_calib::{reconstruct, FeatureTrack, Reconstruction, ReconstructionConfig};
+use kornia_calib::{
+    reconstruct, FeatureTrack, Reconstruction, ReconstructionConfig, TagObservation,
+};
 
 /// Tunable overrides for [`ReconstructionConfig`].
 ///
@@ -78,13 +80,15 @@ pub fn run_sfm(
     cx: f64,
     cy: f64,
     n_frames: usize,
+    tags_for_scale: &[TagObservation],
+    tag_size_m: f64,
     progress: Option<Arc<dyn Fn(usize, usize) + Send + Sync>>,
     overrides: ReconstructionOverrides,
 ) -> Result<Reconstruction, Box<dyn Error>> {
     let cameras = vec![make_camera(fx, fy, cx, cy); n_frames];
     // `.sequential()` tunes the config for video walkthroughs (smaller
     // parallax threshold, more BA iterations).
-    let mut config = ReconstructionConfig::new(0.0).sequential();
+    let mut config = ReconstructionConfig::new(tag_size_m).sequential();
     config.progress = progress;
     if let Some(v) = overrides.max_iterations {
         config.max_iterations = v;
@@ -107,7 +111,13 @@ pub fn run_sfm(
     if let Some(v) = overrides.refine_intrinsics {
         config.refine_intrinsics = v;
     }
-    Ok(reconstruct(&cameras, &[], tracks, &config, None)?)
+    Ok(reconstruct(
+        &cameras,
+        tags_for_scale,
+        tracks,
+        &config,
+        None,
+    )?)
 }
 
 #[cfg(test)]
@@ -143,6 +153,8 @@ mod tests {
             test_util::CX,
             test_util::CY,
             test_util::N_FRAMES,
+            &[],
+            0.0,
             None,
             ReconstructionOverrides::default(),
         )
@@ -181,6 +193,78 @@ mod tests {
     }
 
     #[test]
+    fn run_sfm_anchors_metric_scale_from_a_tag() {
+        use kornia_algebra::Vec3F64;
+        use kornia_calib::TagObservation;
+
+        let tracks = test_util::synthetic_tracks();
+        let cam = || make_camera(test_util::FX, test_util::FY, test_util::CX, test_util::CY);
+        let cams = [cam(), cam(), cam()];
+        let gt = test_util::synthetic_poses();
+        let tag_size = 0.2;
+
+        // A planar 0.2 m tag in front of the rig, in aruco winding (TL,TR,BR,BL).
+        let corners = [
+            Vec3F64::new(-0.1, 0.1, 1.5),
+            Vec3F64::new(0.1, 0.1, 1.5),
+            Vec3F64::new(0.1, -0.1, 1.5),
+            Vec3F64::new(-0.1, -0.1, 1.5),
+        ];
+        let per_camera: Vec<(usize, [kornia_algebra::Vec2F64; 4])> = (0..test_util::N_FRAMES)
+            .map(|c| {
+                let obs = [
+                    test_util::project(corners[0], &gt[c], &cams[c]),
+                    test_util::project(corners[1], &gt[c], &cams[c]),
+                    test_util::project(corners[2], &gt[c], &cams[c]),
+                    test_util::project(corners[3], &gt[c], &cams[c]),
+                ];
+                (c, obs)
+            })
+            .collect();
+        let tag = TagObservation {
+            tag_id: 42,
+            per_camera,
+        };
+
+        let recon = run_sfm(
+            &tracks,
+            test_util::FX,
+            test_util::FY,
+            test_util::CX,
+            test_util::CY,
+            test_util::N_FRAMES,
+            &[tag],
+            tag_size,
+            None,
+            ReconstructionOverrides::default(),
+        )
+        .expect("synthetic scene must reconstruct");
+
+        assert_eq!(
+            recon.scale,
+            ScaleSource::Tag {
+                id: 42,
+                size_m: tag_size
+            }
+        );
+
+        // Metric scale is now fixed by the tag, so the recovered camera baseline
+        // must equal the ground-truth baseline in metres (no similarity freedom).
+        let centres: Vec<Vec3F64> = recon
+            .views
+            .iter()
+            .map(|v| v.as_ref().expect("camera must register").translation)
+            .collect();
+        let gt_centres: Vec<Vec3F64> = gt.iter().map(|p| p.inverse().translation).collect();
+        let recovered = (centres[1] - centres[0]).length();
+        let truth = (gt_centres[1] - gt_centres[0]).length();
+        assert!(
+            (recovered - truth).abs() < 1e-3,
+            "metric baseline {recovered:.6} must match ground truth {truth:.6}"
+        );
+    }
+
+    #[test]
     fn run_sfm_is_up_to_scale_without_tag() {
         let tracks = test_util::synthetic_tracks();
 
@@ -191,6 +275,8 @@ mod tests {
             test_util::CX,
             test_util::CY,
             test_util::N_FRAMES,
+            &[],
+            0.0,
             None,
             ReconstructionOverrides::default(),
         )

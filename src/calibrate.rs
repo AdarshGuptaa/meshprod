@@ -7,11 +7,13 @@
 //! shallow angles. The principal point is assumed to be the image centre —
 //! a single tag cannot separate it from the focal.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use kornia_algebra::Vec2F64;
 use kornia_apriltag::{family::TagFamilyKind, AprilTagDecoder, DecodeTagsConfig};
-use kornia_calib::estimate_focal;
+use kornia_calib::{estimate_focal, TagObservation};
+use kornia_image::Image;
 use serde::Serialize;
 
 use crate::{error::PipelineError, video};
@@ -118,6 +120,48 @@ pub fn calibrate(
         },
         frames,
     ))
+}
+
+/// Detect every Tag36h11 tag across the decoded frames and collect each tag's
+/// per-camera corner observations in aruco winding for metric scale anchoring.
+///
+/// The detector returns corners in `[TR, BR, BL, TL]` order (image y-down);
+/// [`TagObservation`] wants aruco winding `[TL, TR, BR, BL]`. Each distinct tag
+/// id becomes one observation carrying every camera that saw it, so
+/// `kornia_calib::reconstruct` can pick the widest-baseline pair and triangulate
+/// the corners against the known side length.
+pub fn detect_tags_for_scale(gray: &[Image<u8, 1>]) -> Result<Vec<TagObservation>, PipelineError> {
+    let Some(first) = gray.first() else {
+        return Ok(Vec::new());
+    };
+    let size = first.size();
+    let config = DecodeTagsConfig::new(vec![TagFamilyKind::Tag36H11])
+        .map_err(|e| PipelineError::CalibrationFailed(format!("decoder config: {e}")))?;
+    let mut decoder = AprilTagDecoder::new(config, size)
+        .map_err(|e| PipelineError::CalibrationFailed(format!("decoder setup: {e}")))?;
+
+    let mut by_id: HashMap<u16, Vec<(usize, [Vec2F64; 4])>> = HashMap::new();
+    for (camera, frame) in gray.iter().enumerate() {
+        let Ok(detections) = decoder.decode(frame) else {
+            continue;
+        };
+        for detection in detections {
+            let corners = detection.quad.corners;
+            // [TR, BR, BL, TL] -> aruco [TL, TR, BR, BL].
+            let aruco = [
+                Vec2F64::new(corners[3].x as f64, corners[3].y as f64),
+                Vec2F64::new(corners[0].x as f64, corners[0].y as f64),
+                Vec2F64::new(corners[1].x as f64, corners[1].y as f64),
+                Vec2F64::new(corners[2].x as f64, corners[2].y as f64),
+            ];
+            by_id.entry(detection.id).or_default().push((camera, aruco));
+        }
+    }
+
+    Ok(by_id
+        .into_iter()
+        .map(|(tag_id, per_camera)| TagObservation { tag_id, per_camera })
+        .collect())
 }
 
 fn median(values: &mut [f64]) -> f64 {

@@ -451,6 +451,8 @@ mod tests {
             test_util::CX,
             test_util::CY,
             test_util::N_FRAMES,
+            &[],
+            0.0,
             None,
             crate::reconstruction::ReconstructionOverrides::default(),
         )

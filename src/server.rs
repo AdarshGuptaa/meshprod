@@ -58,6 +58,8 @@ pub struct Config {
     pub needle_aspect: f64,
     pub target_faces: usize,
     pub min_component_faces: usize,
+    /// In-scene Tag36h11 edge length in metres (0 = up-to-scale).
+    pub scale_tag_m: f64,
 }
 
 impl Default for Config {
@@ -97,6 +99,7 @@ impl Default for Config {
             needle_aspect: 0.0,
             target_faces: 100_000,
             min_component_faces: 200,
+            scale_tag_m: 0.0,
         }
     }
 }
@@ -680,6 +683,9 @@ fn build_args(c: &Config) -> Vec<String> {
     opt("--needle-aspect", c.needle_aspect.to_string());
     opt("--target-faces", c.target_faces.to_string());
     opt("--min-component-faces", c.min_component_faces.to_string());
+    if c.scale_tag_m > 0.0 {
+        opt("--scale-tag", c.scale_tag_m.to_string());
+    }
     for (on, flag) in [
         (c.geo_verify, "--geo-verify"),
         (c.sprt, "--sprt"),

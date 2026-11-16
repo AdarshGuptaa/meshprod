@@ -264,6 +264,11 @@ struct Args {
     /// run only the calibration (needs --estimate-focal), print JSON, exit
     #[argh(switch)]
     calibrate_only: bool,
+
+    /// anchor metric scale from a Tag36h11 tag of this edge length (metres)
+    /// visible in the capture; without it the map stays up-to-scale
+    #[argh(option)]
+    scale_tag: Option<f64>,
 }
 
 /// Validate CLI values that must be positive.
@@ -517,6 +522,30 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     // the dense stage's texturing.
     let observation_colors = ply_writer::sample_observation_colors(&tracks, &rgb_frames);
 
+    // Optional metric-scale anchor: detect an in-scene Tag36h11 and let
+    // `reconstruct` triangulate its corners against the known side length.
+    let (tags_for_scale, tag_size_m) = match args.scale_tag {
+        Some(size_m) => {
+            eprintln!("[tag] detecting an in-scene Tag36h11 (size {size_m} m) for metric scale");
+            let t = Instant::now();
+            let tags = calibrate::detect_tags_for_scale(&gray_frames)?;
+            let visible = tags.iter().map(|t| t.per_camera.len()).sum::<usize>();
+            eprintln!(
+                "[tag] {} tag(s), {} sightings in {:.1}s",
+                tags.len(),
+                visible,
+                t.elapsed().as_secs_f64()
+            );
+            if tags.is_empty() {
+                eprintln!(
+                    "  warning: --scale-tag given but no Tag36h11 seen; the map stays up-to-scale"
+                );
+            }
+            (tags, size_m)
+        }
+        None => (Vec::new(), 0.0),
+    };
+
     // 5. Reconstruct the scene.
     error::set_stage(6);
     eprintln!("[5/9] reconstructing scene");
@@ -538,9 +567,19 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         sprt,
         refine_intrinsics: args.refine_intrinsics.then_some(true),
     };
-    let reconstruction =
-        reconstruction::run_sfm(&tracks, fx, fy, cx, cy, n_frames, Some(progress), overrides)
-            .map_err(|e| error::PipelineError::BootstrapFailed(e.to_string()))?;
+    let reconstruction = reconstruction::run_sfm(
+        &tracks,
+        fx,
+        fy,
+        cx,
+        cy,
+        n_frames,
+        &tags_for_scale,
+        tag_size_m,
+        Some(progress),
+        overrides,
+    )
+    .map_err(|e| error::PipelineError::BootstrapFailed(e.to_string()))?;
     let registered = reconstruction.views.iter().filter(|v| v.is_some()).count();
     if registered == 0 {
         return Err(error::PipelineError::BootstrapFailed("no view registered".into()).into());
@@ -560,6 +599,14 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         reconstruction.reproj_rmse_px,
         t.elapsed().as_secs_f64(),
     );
+    if args.scale_tag.is_some()
+        && !matches!(reconstruction.scale, kornia_calib::ScaleSource::Tag { .. })
+    {
+        eprintln!(
+            "  warning: --scale-tag given but the tag did not anchor scale (fewer than two \
+             registered views saw it); the map stays up-to-scale"
+        );
+    }
     let registered_frames: Vec<usize> = reconstruction
         .views
         .iter()
@@ -966,6 +1013,8 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             "total_views": n_frames,
             "points": reconstruction.points.len(),
             "rmse_px": reconstruction.reproj_rmse_px,
+            "scale": format!("{:?}", reconstruction.scale),
+            "metric": matches!(reconstruction.scale, kornia_calib::ScaleSource::Tag { .. }),
             "depth_samples": checked,
             "depth_median_pct": median_err * 100.0,
             "depth_p90_pct": p90_err * 100.0,

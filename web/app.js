@@ -18,6 +18,7 @@ const DEFAULT_CONFIG = {
   voxel_resolution: 256, trunc_voxels: 3.0, volume_smoothing: 2,
   hole_fill_iterations: 0, smooth_iterations: 8, bilateral_iterations: 2,
   needle_aspect: 0.0, target_faces: 100000, min_component_faces: 200,
+  scale_tag_m: 0,
 };
 
 const SCHEMA = [
@@ -32,6 +33,8 @@ const SCHEMA = [
         help: "Principal point x. The image centre is the standard guess for a phone lens." },
       { key: "cy", label: "cy", type: "number", min: 0, max: 4000, step: 0.5,
         help: "Principal point y. The image centre is the standard guess for a phone lens." },
+      { key: "scale_tag_m", label: "Tag scale (m)", type: "number", min: 0, max: 1, step: 0.01,
+        help: "Edge length in metres of a Tag36h11 printed IN the scene, to make the mesh metric. 0 = up-to-scale (shape only)." },
     ],
   },
   {

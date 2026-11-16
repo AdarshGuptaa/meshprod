@@ -95,12 +95,16 @@ impl SparseCache {
         let size = ImageSize { width, height };
         let plane = width * height;
 
+        // Layout: all gray frames (plane bytes each) followed by all RGB frames
+        // (plane * 3 bytes each) — the mirror of `store_frames`.
         let mut gray = Vec::with_capacity(count);
-        let mut rgb = Vec::with_capacity(count);
         for _ in 0..count {
             let mut buffer = vec![0u8; plane];
             reader.read_exact(&mut buffer).ok()?;
             gray.push(Image::new(size, buffer).ok()?);
+        }
+        let mut rgb = Vec::with_capacity(count);
+        for _ in 0..count {
             let mut buffer = vec![0u8; plane * 3];
             reader.read_exact(&mut buffer).ok()?;
             rgb.push(Image::new(size, buffer).ok()?);
@@ -145,7 +149,9 @@ impl SparseCache {
                     obs: track
                         .obs
                         .into_iter()
-                        .map(|(camera, [x, y])| (camera, Vec2F64::new(x, y)))
+                        .map(|(camera, [x, y])| {
+                            (camera, Vec2F64::new(f64::from_bits(x), f64::from_bits(y)))
+                        })
                         .collect(),
                 })
                 .collect(),
@@ -163,7 +169,7 @@ impl SparseCache {
                     obs: track
                         .obs
                         .iter()
-                        .map(|&(camera, pixel)| (camera, [pixel.x, pixel.y]))
+                        .map(|&(camera, pixel)| (camera, [pixel.x.to_bits(), pixel.y.to_bits()]))
                         .collect(),
                 })
                 .collect(),
@@ -182,7 +188,10 @@ struct TracksFile {
 
 #[derive(Serialize, Deserialize)]
 struct TrackRecord {
-    obs: Vec<(usize, [f64; 2])>,
+    /// Pixel coordinates as raw `f64` bits. `serde_json` parses decimal floats
+    /// off by one ULP for f32-promoted coordinates, which silently perturbs the
+    /// whole reconstruction on a cache hit; bits round-trip exactly.
+    obs: Vec<(usize, [u64; 2])>,
 }
 
 fn read_u32(reader: &mut impl Read) -> Option<u32> {
@@ -223,7 +232,9 @@ mod tests {
     fn frames_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let cache = SparseCache::new(dir.path().to_path_buf(), "abc", 5, "cfg".into());
-        let rgb = vec![frame(4, 3, 0), frame(4, 3, 7)];
+        // Three frames so an interleaved-vs-blocked layout mismatch cannot
+        // accidentally align on the final frame (a two-frame case masked the bug).
+        let rgb = vec![frame(4, 3, 0), frame(4, 3, 7), frame(4, 3, 13)];
         let gray: Vec<Image<u8, 1>> = rgb
             .iter()
             .map(|f| {
@@ -233,10 +244,12 @@ mod tests {
             .collect();
         cache.store_frames(&rgb, &gray).unwrap();
         let (rgb2, gray2) = cache.load_frames().unwrap();
-        assert_eq!(rgb2.len(), 2);
-        assert_eq!(gray2.len(), 2);
-        assert_eq!(rgb2[1].as_slice(), rgb[1].as_slice());
-        assert_eq!(gray2[0].as_slice(), gray[0].as_slice());
+        assert_eq!(rgb2.len(), 3);
+        assert_eq!(gray2.len(), 3);
+        for i in 0..3 {
+            assert_eq!(rgb2[i].as_slice(), rgb[i].as_slice());
+            assert_eq!(gray2[i].as_slice(), gray[i].as_slice());
+        }
     }
 
     #[test]
@@ -244,14 +257,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = SparseCache::new(dir.path().to_path_buf(), "abc", 5, "cfg".into());
         let tracks = vec![FeatureTrack {
-            obs: vec![(0, Vec2F64::new(1.5, 2.5)), (3, Vec2F64::new(4.0, 5.0))],
+            obs: vec![
+                (0, Vec2F64::new(1.5, 2.5)),
+                // f32-promoted coordinate: `serde_json` decimal round-trip is
+                // off by 1 ULP here, so this guards the bit-pattern encoding.
+                (3, Vec2F64::new(42.525307f32 as f64, 350.49282f32 as f64)),
+            ],
         }];
         cache.store_tracks(&tracks).unwrap();
         let loaded = cache.load_tracks().unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].obs.len(), 2);
         assert_eq!(loaded[0].obs[1].0, 3);
-        assert!((loaded[0].obs[1].1.x - 4.0).abs() < 1e-12);
+        assert_eq!(loaded[0].obs[1].1.x, 42.525307f32 as f64);
+        assert_eq!(loaded[0].obs[1].1.y, 350.49282f32 as f64);
 
         // A different matching config must not hit the same file.
         let other = SparseCache::new(dir.path().to_path_buf(), "abc", 5, "other".into());
