@@ -107,11 +107,11 @@ h3 { font-size: 0.82rem; }
 .status-pill.error { background: rgba(208, 122, 104, 0.18); color: var(--bad); border-color: var(--bad); }
 @keyframes pulse { 50% { opacity: 0.65; } }
 
-main { position: relative; z-index: 1; padding: 1.5rem 2rem 3rem; max-width: 122rem; margin: 0 auto; }
+main { position: relative; z-index: 1; padding: 1.5rem 2rem 3rem; max-width: 134rem; margin: 0 auto; }
 
 .tab-panel { display: none; }
 .tab-panel.active { display: grid; gap: 1rem; animation: panel-in .36s var(--ease); }
-#tab-studio.active { grid-template-columns: 25rem minmax(0, 1fr) 19.5rem; align-items: start; }
+#tab-studio.active { grid-template-columns: 28rem minmax(0, 1fr) 22rem; align-items: start; }
 #tab-trust.active { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 #tab-guide.active, #tab-credits.active, #tab-slides.active { grid-template-columns: minmax(0, 1fr); }
 @keyframes panel-in { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
@@ -162,8 +162,8 @@ main { position: relative; z-index: 1; padding: 1.5rem 2rem 3rem; max-width: 122
 }
 .segmented button.active .icon { color: #101b25; }
 
-.workflow-row { display: flex; gap: 0.4rem; margin-top: 0.5rem; }
-.workflow-row .ghost { flex: 1; font-size: 0.82rem; padding: 0.52rem 0.5rem; }
+.workflow-row { display: flex; flex-wrap: nowrap; gap: 0.45rem; margin-top: 0.5rem; }
+.workflow-row .ghost { flex: 1 1 0; min-width: 0; padding: 0.52rem 0.4rem; font-size: 0.82rem; }
 
 .toggle-list { display: grid; grid-template-columns: 1fr; }
 .toggle-row {
@@ -192,14 +192,17 @@ main { position: relative; z-index: 1; padding: 1.5rem 2rem 3rem; max-width: 122
 .toggle-row[aria-checked="true"] .thumb { transform: translateX(1.15rem); background: var(--gold-2); }
 
 .ghost {
-  display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
-  border: 1px solid var(--line); background: rgba(255, 255, 255, 0.03);
-  color: var(--muted); padding: 0.5rem 0.75rem; border-radius: 0.55rem;
-  font-family: var(--sans); font-size: 0.81rem; font-weight: 600; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.42rem;
+  border: 1px solid rgba(216, 178, 92, 0.4);
+  background: linear-gradient(180deg, rgba(216, 178, 92, 0.15), rgba(216, 178, 92, 0.04));
+  color: var(--gold-2); padding: 0.52rem 0.8rem; border-radius: 0.55rem;
+  font-family: var(--sans); font-size: 0.82rem; font-weight: 600; cursor: pointer; white-space: nowrap;
   transition: color .2s var(--ease), border-color .2s var(--ease), background .2s var(--ease), transform .16s var(--ease), box-shadow .2s var(--ease);
 }
+.ghost .icon { color: var(--gold); }
 .ghost:hover {
-  color: var(--text); border-color: var(--blue); background: rgba(95, 147, 192, 0.14); transform: translateY(-1px);
+  color: #fff4dd; border-color: var(--gold); background: rgba(216, 178, 92, 0.22);
+  box-shadow: 0 0 16px rgba(216, 178, 92, 0.22); transform: translateY(-1px);
 }
 
 .dropzone {
@@ -294,14 +297,14 @@ select:focus, input[type="number"]:focus, input[type="range"]:focus { outline: n
 .switch input:checked + span { background: rgba(216,178,92,.35); border-color: var(--gold); }
 .switch input:checked + span::before { transform: translateX(1.18rem); background: var(--gold-2); }
 
-/* keybinding legend that replaces the old camera button panel */
-.keylist { display: grid; gap: 0.42rem; margin: 0; }
-.keylist > div { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; border-bottom: 1px solid var(--line); padding-bottom: 0.38rem; }
-.keylist > div:last-child { border-bottom: 0; padding-bottom: 0; }
-.keylist dt { margin: 0; display: inline-flex; align-items: center; gap: 0.42rem; color: var(--text); font-size: 0.8rem; }
-.keylist dt .icon { width: 0.95rem; height: 0.95rem; color: var(--blue-2); }
-.keylist dd { margin: 0; color: var(--muted); font-size: 0.78rem; text-align: right; }
-.keylist kbd { font: inherit; font-size: 0.72rem; padding: 0.05rem 0.32rem; border: 1px solid var(--line-2); border-radius: 4px; background: var(--bg-1); color: var(--text); }
+/* keybinding legend */
+.keylist { display: grid; gap: 0.1rem; margin: 0; }
+.keyrow { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.64rem 0.1rem; border-bottom: 1px solid var(--line); }
+.keyrow:last-child { border-bottom: 0; }
+.keychord { display: inline-flex; align-items: center; gap: 0.5rem; color: var(--text); font-size: 0.9rem; line-height: 1; }
+.keychord .icon { width: 1.05rem; height: 1.05rem; color: var(--blue-2); flex: none; }
+.keyact { color: var(--muted); font-size: 0.86rem; text-align: right; white-space: nowrap; }
+.keylist kbd { font: inherit; font-size: 0.76rem; line-height: 1; padding: 0.16rem 0.44rem; border: 1px solid var(--line-2); border-radius: 5px; background: var(--bg-1); color: var(--text); }
 
 /* ---------- viewport ---------- */
 .viewfinder { position: relative; padding: 0.5rem; border-radius: 0.7rem; background: #05090d; border: 1px solid var(--line); }
