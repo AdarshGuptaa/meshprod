@@ -11,8 +11,9 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use axum::{
-    extract::{DefaultBodyLimit, Multipart, Path as UrlPath, State},
-    http::StatusCode,
+    extract::{DefaultBodyLimit, Multipart, Path as UrlPath, Request, State},
+    http::{header, HeaderValue, StatusCode},
+    middleware::{self, Next},
     response::{Json, Response},
     routing::{get, post},
     Router,
@@ -222,6 +223,9 @@ pub fn serve(port: u16) -> Result<(), Box<dyn std::error::Error>> {
             .route("/api/calibrate", post(calibrate))
             .route("/api/mesh/{kind}", get(mesh))
             .fallback_service(tower_http::services::ServeDir::new("web"))
+            // Local dev server: never let the browser heuristically cache the
+            // UI, or an edited app.js/style.css silently keeps serving stale.
+            .layer(middleware::from_fn(no_store))
             .layer(DefaultBodyLimit::max(4 * 1024 * 1024 * 1024))
             .with_state(app);
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
@@ -229,6 +233,14 @@ pub fn serve(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         Ok::<(), Box<dyn std::error::Error>>(())
     })?;
     Ok(())
+}
+
+/// Mark every response `no-store` so edited UI assets are always re-fetched.
+async fn no_store(req: Request, next: Next) -> Response {
+    let mut res = next.run(req).await;
+    res.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    res
 }
 
 fn seed_history() -> Vec<RunSummary> {
