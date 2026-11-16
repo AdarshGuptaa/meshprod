@@ -612,6 +612,23 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
              registered views saw it); the map stays up-to-scale"
         );
     }
+    // Plausibility stop-gap: a tag can anchor "successfully" through drifted
+    // geometry and still be orders of magnitude off (docs/upstream-kornia-issues.md
+    // UP-1/UP-4). Flag a scene extent that cannot belong with the tag size.
+    if let (Some(tag_size_m), true) = (
+        args.scale_tag,
+        matches!(reconstruction.scale, kornia_calib::ScaleSource::Tag { .. }),
+    ) {
+        if let Some(extent) = scene_extent(&reconstruction) {
+            let ratio = extent / tag_size_m;
+            if !(0.5..=100.0).contains(&ratio) {
+                eprintln!(
+                    "  warning: metric scale looks implausible: the map spans {extent:.2} m for a \
+                     {tag_size_m:.3} m tag ({ratio:.0}x); the reconstruction's scale likely drifted"
+                );
+            }
+        }
+    }
     let registered_frames: Vec<usize> = reconstruction
         .views
         .iter()
@@ -1054,7 +1071,6 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// SHA-256 of a file, for provenance.
 /// Extract features, match them in a sliding window and chain the matches into
 /// multi-view tracks (the sparse stage's front half).
 fn sparse_tracks(
@@ -1191,6 +1207,39 @@ fn sparse_tracks(
     );
     error::progress(5, 1, 1);
     Ok(tracks)
+}
+
+/// Largest bounding-box span of the reconstructed points, in whatever world
+/// units the reconstruction uses (metres when the tag anchored scale).
+fn scene_extent(reconstruction: &kornia_calib::Reconstruction) -> Option<f64> {
+    let points = &reconstruction.points;
+    if points.len() < 20 {
+        return None;
+    }
+    // Robust (p5-p95) per-axis span: a handful of far outliers must not trip the
+    // plausibility warning on an otherwise correct metric scale.
+    let mut axes: [Vec<f64>; 3] = [
+        Vec::with_capacity(points.len()),
+        Vec::with_capacity(points.len()),
+        Vec::with_capacity(points.len()),
+    ];
+    for point in points {
+        let p = point.position;
+        axes[0].push(p.x);
+        axes[1].push(p.y);
+        axes[2].push(p.z);
+    }
+    let mut span = 0.0_f64;
+    for axis in &mut axes {
+        axis.sort_by(f64::total_cmp);
+        let lo = (axis.len() as f64 * 0.05) as usize;
+        let hi = ((axis.len() as f64 * 0.95) as usize).min(axis.len() - 1);
+        let d = axis[hi] - axis[lo];
+        if d.is_finite() {
+            span = span.max(d);
+        }
+    }
+    (span > 0.0).then_some(span)
 }
 
 /// Peak resident set size in KiB (0 where unsupported).

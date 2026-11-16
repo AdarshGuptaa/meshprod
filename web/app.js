@@ -120,10 +120,13 @@ for (const group of SCHEMA) {
   }
 }
 
+// fast/balanced/quality pin explicit dense params, so they must turn
+// auto_config OFF — otherwise auto-config rewrites planes/cost/window/ncc and
+// all three collapse to the same "auto" behaviour. Only `auto` leaves it on.
 const PRESETS = {
-  fast: { ...DEFAULT_CONFIG, frame_step: 20, dense_scale: 0.35, dense_planes: 64, voxel_resolution: 192, target_faces: 20000 },
-  balanced: { ...DEFAULT_CONFIG },
-  quality: { ...DEFAULT_CONFIG, frame_step: 5, dense_scale: 0.75, dense_planes: 128, voxel_resolution: 320, target_faces: 80000 },
+  fast: { ...DEFAULT_CONFIG, auto_config: false, frame_step: 20, dense_scale: 0.35, dense_planes: 64, voxel_resolution: 192, target_faces: 20000 },
+  balanced: { ...DEFAULT_CONFIG, auto_config: false },
+  quality: { ...DEFAULT_CONFIG, auto_config: false, frame_step: 5, dense_scale: 0.75, dense_planes: 128, voxel_resolution: 320, target_faces: 80000 },
   auto: { ...DEFAULT_CONFIG, auto_config: true },
 };
 

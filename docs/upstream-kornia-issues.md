@@ -25,7 +25,14 @@ have it), the proposed change, and an acceptance bar.
   SE(3) pose-graph solver (`pose_graph_optimize` with `RelPoseFactor`), but
   `reconstruct` never calls it.
 - **Evidence:** this is the dominant accuracy gap for the orbit-around-an-object
-  captures `meshprod` is built for.
+  captures `meshprod` is built for. Confirmed on the kitchen-roll clip
+  (`apriltag_anchor_test.mp4`, Tag36h11 id 2, 10 cm): with the tag anchoring
+  scale, the mesh came out ~20–66 m wide instead of ~0.3 m. The tag triangulated
+  to ~0.005 up-to-scale units while the object spans ~3 units — a ~200×
+  inconsistency between two regions of the *same* reconstruction. Both kornia's
+  `tag_scale` and a meshprod-side N-view DLT give the same (wrong) scale, so the
+  scale *computation* is fine; the reconstruction's gauge itself drifts. Loop
+  closure is the fix.
 - **Proposed change:** after the incremental grow + terminal BA, detect
   covisible non-consecutive view pairs (frame i matching frame j far outside the
   match window), add them as `RelPoseFactor` constraints, and run a similarity-
@@ -116,6 +123,13 @@ have it), the proposed change, and an acceptance bar.
 ---
 
 ## Notes (not issues — already upstream, need app wiring)
+
+- **meshprod-side stop-gaps for UP-1/UP-4 (already in the app, not upstream):**
+  `meshprod` now leaves kornia up-to-scale and applies its own robust metric
+  scale (N-view DLT over every registered view that saw the tag, median edge),
+  and warns when the resulting scene extent is implausible for the tag size.
+  This is a correctness improvement for clean captures and a visible guard for
+  drifted ones, but it cannot *fix* drift — that is UP-1.
 
 - **Monocular depth priors** (`reconstruct`'s `obs_depth` argument,
   `depth_prior_rel_sigma`) already exist upstream and make a map metric without
