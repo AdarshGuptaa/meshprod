@@ -143,24 +143,24 @@ const PRESETS = {
 
 // Major booleans exposed as one-click toggles above the groups.
 const QUICK_TOGGLES = [
-  ["remove_plane", "Remove plane"],
-  ["isolate_object", "Isolate object"],
-  ["auto_config", "Auto-config"],
-  ["auto_crop", "Auto-crop"],
-  ["refine_intrinsics", "Refine K"],
-  ["sprt", "SPRT"],
-  ["geo_verify", "Epipolar"],
+  ["remove_plane", "Remove plane", "i-layers"],
+  ["isolate_object", "Isolate object", "i-cube"],
+  ["auto_config", "Auto-config", "i-gear"],
+  ["auto_crop", "Auto-crop", "i-check"],
+  ["refine_intrinsics", "Refine K", "i-camera"],
+  ["sprt", "SPRT", "i-shield"],
+  ["geo_verify", "Epipolar", "i-chart"],
 ];
 
 function renderQuickToggles() {
   const host = document.getElementById("quick-toggles");
   if (!host) return;
   host.innerHTML = "";
-  for (const [key, label] of QUICK_TOGGLES) {
+  for (const [key, label, icon] of QUICK_TOGGLES) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "qtoggle" + (config[key] ? " on" : "");
-    b.textContent = label;
+    b.innerHTML = `<svg class="icon"><use href="#${icon}"/></svg><span>${label}</span>`;
     b.title = `Toggle ${label}`;
     b.addEventListener("click", () => {
       config[key] = !config[key];

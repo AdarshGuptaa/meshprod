@@ -135,17 +135,23 @@ main { position: relative; z-index: 1; padding: 1.4rem 1.7rem 3rem; max-width: 1
 
 .inventory { position: sticky; top: 5.2rem; max-height: calc(100vh - 6.4rem); overflow: auto; scrollbar-width: thin; }
 .inv-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; row-gap: 0.4rem; }
-.presets { display: flex; gap: 0.2rem; flex-wrap: wrap; }
-.presets button { padding: 0.42rem 0.6rem; font-size: 0.76rem; }
-.quick-toggles { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.55rem 0 0.2rem; }
+.presets { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.7rem 0 0.1rem; }
+.presets button { padding: 0.42rem 0.55rem; font-size: 0.76rem; }
+.presets .icon { width: 0.9rem; height: 0.9rem; color: var(--blue-2); }
+.presets button.active .icon { color: #101b25; }
+
+.quick-toggles { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.45rem 0 0.2rem; }
 .qtoggle {
+  display: inline-flex; align-items: center; gap: 0.3rem;
   border: 1px solid var(--line); background: rgba(255,255,255,0.03); color: var(--muted);
-  border-radius: 999px; padding: 0.32rem 0.6rem; font-family: var(--sans);
-  font-size: 0.72rem; font-weight: 600; cursor: pointer;
-  transition: color .2s var(--ease), border-color .2s var(--ease), background .2s var(--ease);
+  border-radius: 0.55rem; padding: 0.38rem 0.55rem; font-family: var(--sans);
+  font-size: 0.74rem; font-weight: 600; cursor: pointer;
+  transition: color .2s var(--ease), border-color .2s var(--ease), background .2s var(--ease), transform .16s var(--ease), box-shadow .2s var(--ease);
 }
-.qtoggle:hover { color: var(--text); border-color: var(--blue); }
-.qtoggle.on { color: #101b25; border-color: var(--gold); background: linear-gradient(180deg, var(--gold-2), var(--gold)); }
+.qtoggle .icon { width: 0.9rem; height: 0.9rem; color: var(--blue-2); }
+.qtoggle:hover { color: var(--text); border-color: var(--blue); background: rgba(95,147,192,0.14); transform: translateY(-1px); }
+.qtoggle.on { color: #101b25; border-color: var(--gold); background: linear-gradient(180deg, var(--gold-2), var(--gold)); box-shadow: 0 0 14px rgba(216,178,92,.28); }
+.qtoggle.on .icon { color: #101b25; }
 
 .presets button, .styles button, .ghost {
   display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
@@ -258,7 +264,8 @@ select:focus, input[type="number"]:focus, input[type="range"]:focus { outline: n
 .keylist { display: grid; gap: 0.42rem; margin: 0; }
 .keylist > div { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; border-bottom: 1px solid var(--line); padding-bottom: 0.38rem; }
 .keylist > div:last-child { border-bottom: 0; padding-bottom: 0; }
-.keylist dt { margin: 0; color: var(--text); font-size: 0.8rem; }
+.keylist dt { margin: 0; display: inline-flex; align-items: center; gap: 0.42rem; color: var(--text); font-size: 0.8rem; }
+.keylist dt .icon { width: 0.95rem; height: 0.95rem; color: var(--blue-2); }
 .keylist dd { margin: 0; color: var(--muted); font-size: 0.78rem; text-align: right; }
 .keylist kbd { font: inherit; font-size: 0.72rem; padding: 0.05rem 0.32rem; border: 1px solid var(--line-2); border-radius: 4px; background: var(--bg-1); color: var(--text); }
 

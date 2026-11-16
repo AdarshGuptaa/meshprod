@@ -33,6 +33,7 @@
     <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 11h14v2H5v-2Z"/></symbol>
     <symbol id="i-reset" viewBox="0 0 24 24"><path d="M12 5a7 7 0 1 1-6.6 9.3l1.9-.6A5 5 0 1 0 12 7v3L7 6l5-4v3Z"/></symbol>
     <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 4h6v2H6v4H4V4Zm10 0h6v6h-2V6h-4V4ZM4 14h2v4h4v2H4v-6Zm16 0v6h-6v-2h4v-4h2Z"/></symbol>
+    <symbol id="i-ruler" viewBox="0 0 24 24"><path d="M2 9h20v6H2V9Zm2 1.6v2.8h1.5v-1.4H7v1.4h1.5v-2.8H10v2.8h1.5v-1.4H13v1.4h1.5v-2.8H16v2.8h1.5v-1.4H19v1.4h1v-2.8H4Z"/></symbol>
     <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M12 4a8 8 0 1 1-7.4 5H2.5l2.9-3 2.9 3H6.1A6 6 0 1 0 12 6V4Z"/></symbol>
   </svg>
 
@@ -56,14 +57,14 @@
       <aside class="panel inventory">
         <div class="inv-head">
           <h2><svg class="icon"><use href="#i-layers"/></svg>Loadout</h2>
-          <div class="presets">
-            <button data-preset="fast">Fast</button>
-            <button data-preset="balanced" class="active">Balanced</button>
-            <button data-preset="quality">Quality</button>
-            <button data-preset="auto">Auto</button>
-            <button data-preset="object">Object scan</button>
-            <button data-preset="metric">Metric</button>
-          </div>
+        </div>
+        <div class="presets" id="presets">
+          <button data-preset="fast"><svg class="icon"><use href="#i-spark"/></svg>Fast</button>
+          <button data-preset="balanced" class="active"><svg class="icon"><use href="#i-layers"/></svg>Balanced</button>
+          <button data-preset="quality"><svg class="icon"><use href="#i-check"/></svg>Quality</button>
+          <button data-preset="auto"><svg class="icon"><use href="#i-gear"/></svg>Auto</button>
+          <button data-preset="object"><svg class="icon"><use href="#i-cube"/></svg>Object</button>
+          <button data-preset="metric"><svg class="icon"><use href="#i-ruler"/></svg>Metric</button>
         </div>
         <div class="quick-toggles" id="quick-toggles"></div>
 
@@ -125,13 +126,13 @@
         <section class="panel view-legend">
           <h2><svg class="icon"><use href="#i-camera"/></svg>View</h2>
           <dl class="keylist">
-            <div><dt><kbd>MMB</kbd> drag</dt><dd>Orbit</dd></div>
-            <div><dt><kbd>Shift</kbd>+<kbd>MMB</kbd></dt><dd>Pan</dd></div>
-            <div><dt>Scroll</dt><dd>Zoom</dd></div>
-            <div><dt><kbd>+</kbd> / <kbd>−</kbd></dt><dd>Zoom</dd></div>
-            <div><dt>Arrow keys</dt><dd>Orbit</dd></div>
-            <div><dt><kbd>F</kbd></dt><dd>Frame mesh</dd></div>
-            <div><dt><kbd>0</kbd></dt><dd>Reset view</dd></div>
+            <div><dt><svg class="icon"><use href="#i-rotate"/></svg><kbd>MMB</kbd> drag</dt><dd>Orbit</dd></div>
+            <div><dt><svg class="icon"><use href="#i-expand"/></svg><kbd>Shift</kbd>+<kbd>MMB</kbd></dt><dd>Pan</dd></div>
+            <div><dt><svg class="icon"><use href="#i-plus"/></svg>Scroll</dt><dd>Zoom</dd></div>
+            <div><dt><svg class="icon"><use href="#i-minus"/></svg><kbd>+</kbd> / <kbd>−</kbd></dt><dd>Zoom</dd></div>
+            <div><dt><svg class="icon"><use href="#i-left"/></svg>Arrow keys</dt><dd>Orbit</dd></div>
+            <div><dt><svg class="icon"><use href="#i-camera"/></svg><kbd>F</kbd></dt><dd>Frame mesh</dd></div>
+            <div><dt><svg class="icon"><use href="#i-reset"/></svg><kbd>0</kbd></dt><dd>Reset view</dd></div>
           </dl>
         </section>
       </aside>
