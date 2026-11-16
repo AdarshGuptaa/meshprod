@@ -104,4 +104,9 @@ for (const p of dataPresets) assert(p in PRESETS, `button preset "${p}" is not d
 assert.equal(dataPresets.length, 4, "expected four quality presets");
 fill("buttons map to actions/presets", ++n);
 
+// 9) The cancel control exists and is wired to the cancel endpoint.
+assert(html.includes('id="cancel-run"'), "missing cancel button");
+assert(app.includes('"/api/cancel"'), "cancel button is not wired to /api/cancel");
+fill("cancel button wired", ++n);
+
 console.log(`\nUI config tests passed (${n}).`);

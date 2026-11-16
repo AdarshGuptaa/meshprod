@@ -170,6 +170,10 @@ struct Job {
     report: Option<serde_json::Value>,
     video: Option<PathBuf>,
     output: Option<PathBuf>,
+    /// PID of the running pipeline child, for cancellation.
+    pid: Option<u32>,
+    /// Set by /api/cancel; the run thread reports "cancelled", not an error.
+    cancel_requested: bool,
 }
 
 #[derive(Clone)]
@@ -206,6 +210,8 @@ pub fn serve(port: u16) -> Result<(), Box<dyn std::error::Error>> {
             report: None,
             video: None,
             output: None,
+            pid: None,
+            cancel_requested: false,
         })),
         dir: dir.clone(),
         history: Arc::new(Mutex::new(seeded)),
@@ -220,6 +226,7 @@ pub fn serve(port: u16) -> Result<(), Box<dyn std::error::Error>> {
             .route("/api/history", get(history))
             .route("/api/diagnostics", get(diagnostics))
             .route("/api/run", post(run))
+            .route("/api/cancel", post(cancel))
             .route("/api/calibrate", post(calibrate))
             .route("/api/mesh/{kind}", get(mesh))
             .fallback_service(tower_http::services::ServeDir::new("web"))
@@ -441,6 +448,8 @@ async fn run(
             report: None,
             video: Some(video_path.clone()),
             output: None,
+            pid: None,
+            cancel_requested: false,
         };
     }
 
@@ -468,6 +477,7 @@ async fn run(
                 return;
             }
         };
+        job_state.lock().unwrap().pid = Some(child.id());
         if let Some(stderr) = child.stderr.take() {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                 let mut j = job_state.lock().unwrap();
@@ -480,8 +490,12 @@ async fn run(
         }
         let code = child.wait().ok().and_then(|s| s.code());
         let mut j = job_state.lock().unwrap();
+        j.pid = None;
         j.stats.seconds = Some(started.elapsed().as_secs_f64());
-        if code == Some(0) && out_path.exists() {
+        if j.cancel_requested {
+            j.status = "cancelled".into();
+            j.log.push("run cancelled".into());
+        } else if code == Some(0) && out_path.exists() {
             j.status = "done".into();
             j.output = Some(out_path.clone());
             // Prefer the machine-readable report over log parsing.
@@ -547,6 +561,39 @@ async fn run(
     });
 
     Ok(Json(serde_json::json!({ "started": true })))
+}
+
+/// Stop the running pipeline child, if any.
+async fn cancel(State(app): State<App>) -> Json<serde_json::Value> {
+    let pid = {
+        let mut job = app.job.lock().unwrap();
+        if job.status != "running" {
+            return Json(serde_json::json!({ "cancelled": false }));
+        }
+        job.cancel_requested = true;
+        job.pid
+    };
+    if let Some(pid) = pid {
+        terminate(pid);
+    }
+    Json(serde_json::json!({ "cancelled": pid.is_some() }))
+}
+
+/// Best-effort termination of a child process by PID.
+fn terminate(pid: u32) {
+    let pid = pid.to_string();
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill").args(["-TERM", &pid]).status();
+    }
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill").args(["/PID", &pid, "/F"]).status();
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = pid;
+    }
 }
 
 /// Estimate the focal length from a printed Tag36h11 tag.
@@ -929,6 +976,17 @@ mod tests {
         }
         assert_eq!(value_of(&args, "--object-support"), Some("4"));
         assert_eq!(value_of(&args, "--object-centrality"), Some("0.7"));
+    }
+
+    /// Cancelling must actually stop the child process.
+    #[cfg(unix)]
+    #[test]
+    fn terminate_stops_a_child() {
+        use std::process::Command;
+        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        terminate(child.id());
+        let status = child.wait().unwrap();
+        assert!(!status.success(), "child should have been terminated");
     }
 
     /// The default config must round-trip through JSON (what the UI sends).

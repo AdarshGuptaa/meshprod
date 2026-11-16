@@ -467,6 +467,19 @@ runButton.addEventListener("click", async () => {
   }
 });
 
+const cancelButton = document.getElementById("cancel-run");
+cancelButton.addEventListener("click", async () => {
+  cancelButton.disabled = true;
+  cancelButton.querySelector("span").textContent = "Cancelling…";
+  try {
+    await fetch("/api/cancel", { method: "POST" });
+  } catch (err) {
+    appendLog(`cancel failed: ${err.message}`);
+    cancelButton.disabled = false;
+    cancelButton.querySelector("span").textContent = "Cancel run";
+  }
+});
+
 async function poll() {
   try {
     applyStatus(await (await fetch("/api/status", { cache: "no-store" })).json());
@@ -490,6 +503,12 @@ function applyStatus(data) {
   runButton.innerHTML = data.status === "running"
     ? '<svg class="icon"><use href="#i-play"/></svg>Reconstructing…'
     : '<svg class="icon"><use href="#i-play"/></svg>Run reconstruction';
+  const running = data.status === "running";
+  cancelButton.hidden = !running;
+  if (running) {
+    cancelButton.disabled = false;
+    cancelButton.querySelector("span").textContent = "Cancel run";
+  }
   if (data.status === "done" && stats.faces) {
     const key = `${stats.faces}-${stats.seconds}`;
     if (key !== lastMeshKey) {
