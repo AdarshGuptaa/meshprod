@@ -9,10 +9,13 @@ use std::error::Error;
 use std::sync::Arc;
 
 use kornia_3d::camera::PinholeCamera;
+use kornia_3d::pose::{triangulate_n_view_linear, Pose3d};
 use kornia_3d::ransac::SPRTConfig;
 use kornia_calib::{
-    reconstruct, FeatureTrack, Reconstruction, ReconstructionConfig, TagObservation,
+    reconstruct, FeatureTrack, Reconstruction, ReconstructionConfig, ScaleSource, TagObservation,
 };
+
+use crate::calibrate::median;
 
 /// Tunable overrides for [`ReconstructionConfig`].
 ///
@@ -87,8 +90,11 @@ pub fn run_sfm(
 ) -> Result<Reconstruction, Box<dyn Error>> {
     let cameras = vec![make_camera(fx, fy, cx, cy); n_frames];
     // `.sequential()` tunes the config for video walkthroughs (smaller
-    // parallax threshold, more BA iterations).
-    let mut config = ReconstructionConfig::new(tag_size_m).sequential();
+    // parallax threshold, more BA iterations). We always pass `tag_size_m = 0`
+    // so kornia leaves the map up-to-scale; metric scale is applied below with
+    // a robust N-view estimate (kornia's single widest-baseline pair collapses
+    // on orbit captures).
+    let mut config = ReconstructionConfig::new(0.0).sequential();
     config.progress = progress;
     if let Some(v) = overrides.max_iterations {
         config.max_iterations = v;
@@ -111,13 +117,98 @@ pub fn run_sfm(
     if let Some(v) = overrides.refine_intrinsics {
         config.refine_intrinsics = v;
     }
-    Ok(reconstruct(
-        &cameras,
-        tags_for_scale,
-        tracks,
-        &config,
-        None,
-    )?)
+    let mut recon = reconstruct(&cameras, &[], tracks, &config, None)?;
+    if tag_size_m > 0.0 {
+        if let Some((tag_id, scale)) =
+            robust_tag_scale(&recon, tags_for_scale, &cameras, tag_size_m)
+        {
+            for pose in recon.views.iter_mut().flatten() {
+                pose.translation *= scale;
+            }
+            for point in &mut recon.points {
+                point.position *= scale;
+            }
+            recon.scale = ScaleSource::Tag {
+                id: tag_id,
+                size_m: tag_size_m,
+            };
+        }
+    }
+    Ok(recon)
+}
+
+/// Estimate a metric scale factor from a planar tag, robustly.
+///
+/// kornia's own `tag_scale` triangulates the four corners from the single
+/// widest-baseline registered pair and averages the edges — on an orbit that
+/// pair can be nearly fronto-parallel and collapse the tag to a point, giving a
+/// wildly wrong scale. Here each corner is triangulated by **N-view DLT over
+/// every registered view that saw the tag**, and the scale is the ratio of the
+/// known side length to the **median** of the four recovered edges.
+fn robust_tag_scale(
+    recon: &Reconstruction,
+    tags: &[TagObservation],
+    cameras: &[PinholeCamera],
+    tag_size_m: f64,
+) -> Option<(u16, f64)> {
+    let tag = tags.first()?;
+    let seers: Vec<usize> = tag
+        .per_camera
+        .iter()
+        .filter(|(c, _)| recon.views[*c].is_some())
+        .map(|(c, _)| *c)
+        .collect();
+    if seers.len() < 2 {
+        return None;
+    }
+
+    let mut world = Vec::with_capacity(4);
+    for k in 0..4 {
+        let mut pixels = Vec::with_capacity(seers.len());
+        let mut projections = Vec::with_capacity(seers.len());
+        for &c in &seers {
+            let corners = tag.per_camera.iter().find(|(cc, _)| *cc == c)?.1;
+            pixels.push(corners[k]);
+            let world_to_cam = recon.views[c].as_ref()?.inverse();
+            projections.push(projection_3x4(&cameras[c], &world_to_cam));
+        }
+        world.push(triangulate_n_view_linear(&pixels, &projections)?);
+    }
+
+    let mut edges = [
+        (world[0] - world[1]).length(),
+        (world[1] - world[2]).length(),
+        (world[2] - world[3]).length(),
+        (world[3] - world[0]).length(),
+    ];
+    let side = median(&mut edges);
+    if side <= 1e-9 {
+        return None;
+    }
+    Some((tag.tag_id, tag_size_m / side))
+}
+
+/// Flatten the `3x4` camera matrix `K [R | t]` in row-major order for
+/// [`triangulate_n_view_linear`], where `(R, t)` is a world-to-camera pose.
+fn projection_3x4(cam: &PinholeCamera, world_to_cam: &Pose3d) -> [f64; 12] {
+    let r = world_to_cam.rotation;
+    let t = world_to_cam.translation;
+    let (fx, fy, cx, cy) = (cam.fx, cam.fy, cam.cx, cam.cy);
+    let (r0, r1, r2) = (r.row(0), r.row(1), r.row(2));
+    [
+        fx * r0.x + cx * r2.x,
+        fx * r0.y + cx * r2.y,
+        fx * r0.z + cx * r2.z,
+        fx * t.x + cx * t.z,
+        fy * r1.x + cy * r2.x,
+        fy * r1.y + cy * r2.y,
+        fy * r1.z + cy * r2.z,
+        fy * t.y + cy * t.z,
+        r2.x,
+        r2.y,
+        r2.z,
+        t.z,
+    ]
 }
 
 #[cfg(test)]

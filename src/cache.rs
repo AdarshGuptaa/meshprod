@@ -114,6 +114,7 @@ impl SparseCache {
 
     /// Persist decoded frames (atomically: a partial write never becomes a hit).
     pub fn store_frames(&self, rgb: &[Image<u8, 3>], gray: &[Image<u8, 1>]) -> std::io::Result<()> {
+        debug_assert_eq!(rgb.len(), gray.len(), "frames must be paired");
         let path = self.frames_path();
         fs::create_dir_all(&self.dir)?;
         let tmp = path.with_extension("bin.tmp");

@@ -158,13 +158,16 @@ pub fn detect_tags_for_scale(gray: &[Image<u8, 1>]) -> Result<Vec<TagObservation
         }
     }
 
-    Ok(by_id
+    let mut tags: Vec<TagObservation> = by_id
         .into_iter()
         .map(|(tag_id, per_camera)| TagObservation { tag_id, per_camera })
-        .collect())
+        .collect();
+    // `reconstruct` anchors scale from `tags.first()`, so make that deterministic.
+    tags.sort_by_key(|t| t.tag_id);
+    Ok(tags)
 }
 
-fn median(values: &mut [f64]) -> f64 {
+pub(crate) fn median(values: &mut [f64]) -> f64 {
     values.sort_by(f64::total_cmp);
     let mid = values.len() / 2;
     if values.len().is_multiple_of(2) {

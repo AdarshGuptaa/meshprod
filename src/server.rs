@@ -600,9 +600,11 @@ async fn calibrate(
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err((
             StatusCode::BAD_REQUEST,
+            // main() prints "error: <message>" first, then code + hints; the
+            // first line is the actual failure, the last is a hint.
             stderr
                 .lines()
-                .last()
+                .next()
                 .unwrap_or("calibration failed")
                 .trim_start_matches("error: ")
                 .to_string(),

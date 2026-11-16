@@ -530,8 +530,13 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             let t = Instant::now();
             let tags = calibrate::detect_tags_for_scale(&gray_frames)?;
             let visible = tags.iter().map(|t| t.per_camera.len()).sum::<usize>();
+            let ids = tags
+                .iter()
+                .map(|t| format!("id {} ({} views)", t.tag_id, t.per_camera.len()))
+                .collect::<Vec<_>>()
+                .join(", ");
             eprintln!(
-                "[tag] {} tag(s), {} sightings in {:.1}s",
+                "[tag] {} tag(s), {} sightings in {:.1}s: {ids}",
                 tags.len(),
                 visible,
                 t.elapsed().as_secs_f64()
