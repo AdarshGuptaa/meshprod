@@ -12,7 +12,7 @@ const DEFAULT_CONFIG = {
   fx: 895, fy: 895, cx: 640, cy: 360,
   detector: "sift", frame_step: 10, n_features: 500, match_window: 5, ratio: 0.8,
   geo_verify: true, geo_threshold: 3.0, geo_min_inliers: 15, wide_baseline: 0,
-  sprt: true, refine_intrinsics: false, auto_config: true, remove_plane: false,
+  sprt: true, refine_intrinsics: false, auto_config: true, remove_plane: false, auto_crop: false,
   dense_scale: 0.5, dense_planes: 96, dense_window: 5, dense_neighbors: 3,
   ncc_min: 0.4, lr_required: 1, cost: "ncc", sgm_paths: 4,
   voxel_resolution: 256, trunc_voxels: 3.0, volume_smoothing: 2,
@@ -137,7 +137,41 @@ const PRESETS = {
   balanced: { ...DEFAULT_CONFIG, auto_config: false },
   quality: { ...DEFAULT_CONFIG, auto_config: false, frame_step: 5, dense_scale: 0.75, dense_planes: 128, voxel_resolution: 320, target_faces: 80000 },
   auto: { ...DEFAULT_CONFIG, auto_config: true },
+  object: { ...DEFAULT_CONFIG, auto_config: false, isolate_object: true, remove_plane: true },
+  metric: { ...DEFAULT_CONFIG, auto_config: false, scale_tag_m: 0.1 },
 };
+
+// Major booleans exposed as one-click toggles above the groups.
+const QUICK_TOGGLES = [
+  ["remove_plane", "Remove plane"],
+  ["isolate_object", "Isolate object"],
+  ["auto_config", "Auto-config"],
+  ["auto_crop", "Auto-crop"],
+  ["refine_intrinsics", "Refine K"],
+  ["sprt", "SPRT"],
+  ["geo_verify", "Epipolar"],
+];
+
+function renderQuickToggles() {
+  const host = document.getElementById("quick-toggles");
+  if (!host) return;
+  host.innerHTML = "";
+  for (const [key, label] of QUICK_TOGGLES) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "qtoggle" + (config[key] ? " on" : "");
+    b.textContent = label;
+    b.title = `Toggle ${label}`;
+    b.addEventListener("click", () => {
+      config[key] = !config[key];
+      renderQuickToggles();
+      renderGroups();
+      const item = SCHEMA.flatMap((g) => g.items).find((i) => i.key === key);
+      if (selectedKey && item) openDetails(item);
+    });
+    host.appendChild(b);
+  }
+}
 
 const ALTAI = [
   ["Human agency", "Every parameter is exposed and logged; a person decides when a mesh is usable. The pipeline never auto-accepts a result.", "good"],
@@ -261,10 +295,9 @@ function slotEl(item) {
     <span class="slot-value">${formatValue(config[item.key])}</span>
     <span class="slot-bar"><i></i></span>`;
   updateSlotEl(btn, item);
-  const select = () => openDetails(item);
-  btn.addEventListener("mouseenter", select);
-  btn.addEventListener("focus", select);
-  btn.addEventListener("click", select);
+  // Click-only: hovering must not swap the inspector (buttons stay
+  // keyboard-activatable via Enter/Space, which fire a click).
+  btn.addEventListener("click", () => openDetails(item));
   return btn;
 }
 
@@ -336,6 +369,7 @@ document.querySelectorAll("[data-preset]").forEach((btn) => {
     btn.classList.add("active");
     config = { ...(PRESETS[btn.dataset.preset] || DEFAULT_CONFIG) };
     renderGroups();
+    renderQuickToggles();
     const item = SCHEMA.flatMap((g) => g.items).find((i) => i.key === selectedKey);
     if (item) openDetails(item);
   });
@@ -883,6 +917,23 @@ controls.zoomSpeed = 1.35;
 controls.panSpeed = 1.15;
 controls.rotateSpeed = 0.9;
 controls.screenSpacePanning = true;
+// Blender-style: middle-drag orbits, Shift+middle-drag pans, wheel zooms.
+// Left stays orbit (trackpads have no middle button) and right stays pan.
+controls.mouseButtons = {
+  LEFT: THREE.MOUSE.ROTATE,
+  MIDDLE: THREE.MOUSE.ROTATE,
+  RIGHT: THREE.MOUSE.PAN,
+};
+const setShiftPan = (on) => {
+  controls.mouseButtons.MIDDLE = on ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+};
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Shift") setShiftPan(true);
+});
+window.addEventListener("keyup", (e) => {
+  if (e.key === "Shift") setShiftPan(false);
+});
+window.addEventListener("blur", () => setShiftPan(false));
 
 scene.add(new THREE.HemisphereLight(0xfdfaf2, 0x1a2229, 1.05));
 const key = new THREE.DirectionalLight(0xffffff, 2.0);
@@ -1023,10 +1074,6 @@ const camActions = {
   auto: () => { controls.autoRotate = !controls.autoRotate; },
 };
 
-document.querySelectorAll("[data-cam]").forEach((btn) => {
-  btn.addEventListener("click", () => camActions[btn.dataset.cam]?.());
-});
-
 document.getElementById("view-fullscreen").addEventListener("click", async () => {
   if (!document.fullscreenElement) {
     await viewfinder.requestFullscreen?.().catch(() => {});
@@ -1140,6 +1187,7 @@ renderer.setAnimationLoop(() => {
 /* ---------- boot ---------- */
 function firstPaint() {
   renderGroups();
+  renderQuickToggles();
   renderGuide();
   renderAltai();
   renderSlides();
@@ -1159,6 +1207,7 @@ async function syncWithServer() {
   try {
     config = await (await fetch("/api/defaults", { cache: "no-store" })).json();
     renderGroups();
+    renderQuickToggles();
     const item = SCHEMA.flatMap((g) => g.items).find((i) => i.key === selectedKey);
     if (item) openDetails(item);
   } catch {

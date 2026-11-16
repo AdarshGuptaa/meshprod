@@ -61,8 +61,11 @@
             <button data-preset="balanced" class="active">Balanced</button>
             <button data-preset="quality">Quality</button>
             <button data-preset="auto">Auto</button>
+            <button data-preset="object">Object scan</button>
+            <button data-preset="metric">Metric</button>
           </div>
         </div>
+        <div class="quick-toggles" id="quick-toggles"></div>
 
         <label class="dropzone" id="dropzone">
           <input type="file" id="video-input" accept="video/*" hidden />
@@ -88,19 +91,20 @@
               <p>No mesh yet — run a reconstruction.</p>
             </div>
           </div>
-        </div>
-        <div class="viewer-toolbar">
-          <div class="styles" id="styles">
-            <button data-style="colour" class="active">Colour</button>
-            <button data-style="clay">Clay</button>
-            <button data-style="normals">Normals</button>
-            <button data-style="height">Height</button>
-            <button data-style="wireframe">Wireframe</button>
-            <button data-style="xray">X-ray</button>
-          </div>
-          <div class="toolbar-right">
-            <button class="ghost" id="view-fullscreen"><svg class="icon"><use href="#i-expand"/></svg>Fullscreen</button>
-            <a class="ghost" id="download-mesh" download><svg class="icon"><use href="#i-download"/></svg>PLY</a>
+          <div class="view-hud">
+            <div class="styles" id="styles">
+              <button data-style="colour" class="active">Colour</button>
+              <button data-style="clay">Clay</button>
+              <button data-style="normals">Normals</button>
+              <button data-style="height">Height</button>
+              <button data-style="wireframe">Wireframe</button>
+              <button data-style="xray">X-ray</button>
+            </div>
+            <div class="view-hud-right">
+              <span class="view-keys">MMB orbit · Shift+MMB pan · scroll zoom · F frame</span>
+              <button class="ghost" id="view-fullscreen"><svg class="icon"><use href="#i-expand"/></svg>Fullscreen</button>
+              <a class="ghost" id="download-mesh" download><svg class="icon"><use href="#i-download"/></svg>PLY</a>
+            </div>
           </div>
         </div>
 
@@ -116,47 +120,19 @@
       <aside class="rail">
         <section class="panel inspector">
           <h2><svg class="icon"><use href="#i-info"/></svg>Inspector</h2>
-          <div id="details"><p class="hint">Hover a slot to inspect it.</p></div>
+          <div id="details"><p class="hint">Click a slot to inspect it.</p></div>
         </section>
-        <section class="panel camera-panel">
-          <h2><svg class="icon"><use href="#i-camera"/></svg>Camera</h2>
-          <div class="cam-section">
-            <span class="cam-label">Orbit</span>
-            <div class="cam-pad">
-              <button data-cam="orbit-up" title="Orbit up"><svg class="icon"><use href="#i-up"/></svg></button>
-              <button data-cam="orbit-left" title="Orbit left"><svg class="icon"><use href="#i-left"/></svg></button>
-              <button data-cam="reset" title="Reset view"><svg class="icon"><use href="#i-reset"/></svg></button>
-              <button data-cam="orbit-right" title="Orbit right"><svg class="icon"><use href="#i-right"/></svg></button>
-              <button data-cam="orbit-down" title="Orbit down"><svg class="icon"><use href="#i-down"/></svg></button>
-            </div>
-          </div>
-          <div class="cam-section">
-            <span class="cam-label">Zoom</span>
-            <div class="cam-row">
-              <button data-cam="zoom-in" title="Zoom in"><svg class="icon"><use href="#i-plus"/></svg></button>
-              <button data-cam="zoom-out" title="Zoom out"><svg class="icon"><use href="#i-minus"/></svg></button>
-            </div>
-          </div>
-          <div class="cam-section">
-            <span class="cam-label">Pan</span>
-            <div class="cam-pad">
-              <button data-cam="pan-up" title="Pan up"><svg class="icon"><use href="#i-up"/></svg></button>
-              <button data-cam="pan-left" title="Pan left"><svg class="icon"><use href="#i-left"/></svg></button>
-              <button data-cam="auto" title="Toggle auto-rotate"><svg class="icon"><use href="#i-rotate"/></svg></button>
-              <button data-cam="pan-right" title="Pan right"><svg class="icon"><use href="#i-right"/></svg></button>
-              <button data-cam="pan-down" title="Pan down"><svg class="icon"><use href="#i-down"/></svg></button>
-            </div>
-          </div>
-          <div class="cam-section">
-            <span class="cam-label">View</span>
-            <div class="cam-row">
-              <button data-cam="front">Front</button>
-              <button data-cam="top">Top</button>
-              <button data-cam="side">Side</button>
-              <button data-cam="fit">Fit</button>
-            </div>
-          </div>
-          <p class="hint">drag = orbit · wheel = zoom · right-drag = pan · F = fit</p>
+        <section class="panel view-legend">
+          <h2><svg class="icon"><use href="#i-camera"/></svg>View</h2>
+          <dl class="keylist">
+            <div><dt><kbd>MMB</kbd> drag</dt><dd>Orbit</dd></div>
+            <div><dt><kbd>Shift</kbd>+<kbd>MMB</kbd></dt><dd>Pan</dd></div>
+            <div><dt>Scroll</dt><dd>Zoom</dd></div>
+            <div><dt><kbd>+</kbd> / <kbd>−</kbd></dt><dd>Zoom</dd></div>
+            <div><dt>Arrow keys</dt><dd>Orbit</dd></div>
+            <div><dt><kbd>F</kbd></dt><dd>Frame mesh</dd></div>
+            <div><dt><kbd>0</kbd></dt><dd>Reset view</dd></div>
+          </dl>
         </section>
       </aside>
     </section>

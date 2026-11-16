@@ -62,6 +62,8 @@ pub struct Config {
     pub scale_tag_m: f64,
     /// Isolate the orbit-centered object from the background before fusion.
     pub isolate_object: bool,
+    /// Keep only the largest connected component of the dense cloud.
+    pub auto_crop: bool,
     /// Min registered views observing an object point (with isolate_object).
     pub object_support: usize,
     /// Min fraction of central sightings for an object point (with isolate_object).
@@ -109,6 +111,7 @@ impl Default for Config {
             min_component_faces: 200,
             scale_tag_m: 0.0,
             isolate_object: false,
+            auto_crop: false,
             object_support: 3,
             object_centrality: 0.6,
             object_central_radius: 0.35,
@@ -699,6 +702,9 @@ fn build_args(c: &Config) -> Vec<String> {
     opt("--min-component-faces", c.min_component_faces.to_string());
     if c.scale_tag_m > 0.0 {
         opt("--scale-tag", c.scale_tag_m.to_string());
+    }
+    if c.auto_crop {
+        a.push("--auto-crop".to_string());
     }
     if c.isolate_object {
         a.push("--isolate-object".to_string());

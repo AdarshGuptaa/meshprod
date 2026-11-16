@@ -57,7 +57,15 @@ Open them in MeshLab, CloudCompare, Blender or Open3D.
 ```bash
 ./target/release/sfm2mesh --serve --port 8080   # run from the repo root
 # open http://127.0.0.1:8080
+node web/test/config.test.mjs                   # UI config/schema wiring tests
 ```
+
+The Studio has quality presets (Fast/Balanced/Quality/Auto) plus **Object scan**
+and **Metric** workflows, and one-click toggles for the major booleans (remove
+plane, isolate object, auto-config, auto-crop, refine K, SPRT, epipolar). The
+viewer uses Blender-style controls (middle-drag orbit, Shift+middle-drag pan,
+scroll zoom) with a keybinding legend; the view-type buttons (colour/clay/
+normals/height/wireframe/x-ray) float over the viewport and stay in fullscreen.
 
 A game-HUD console (deep navy glass, steel blue, gold): drag-and-drop a video,
 watch the nine pipeline stages with **live per-stage progress bars**, orbit the

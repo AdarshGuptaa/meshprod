@@ -137,15 +137,24 @@ main { position: relative; z-index: 1; padding: 1.4rem 1.7rem 3rem; max-width: 1
 .inv-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; row-gap: 0.4rem; }
 .presets { display: flex; gap: 0.2rem; flex-wrap: wrap; }
 .presets button { padding: 0.42rem 0.6rem; font-size: 0.76rem; }
+.quick-toggles { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.55rem 0 0.2rem; }
+.qtoggle {
+  border: 1px solid var(--line); background: rgba(255,255,255,0.03); color: var(--muted);
+  border-radius: 999px; padding: 0.32rem 0.6rem; font-family: var(--sans);
+  font-size: 0.72rem; font-weight: 600; cursor: pointer;
+  transition: color .2s var(--ease), border-color .2s var(--ease), background .2s var(--ease);
+}
+.qtoggle:hover { color: var(--text); border-color: var(--blue); }
+.qtoggle.on { color: #101b25; border-color: var(--gold); background: linear-gradient(180deg, var(--gold-2), var(--gold)); }
 
-.presets button, .styles button, .ghost, .cam-row button, .cam-pad button {
+.presets button, .styles button, .ghost {
   display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
   border: 1px solid var(--line); background: rgba(255, 255, 255, 0.03);
   color: var(--muted); padding: 0.5rem 0.75rem; border-radius: 0.55rem;
   font-family: var(--sans); font-size: 0.81rem; font-weight: 600; cursor: pointer;
   transition: color .2s var(--ease), border-color .2s var(--ease), background .2s var(--ease), transform .16s var(--ease), box-shadow .2s var(--ease);
 }
-.presets button:hover, .styles button:hover, .ghost:hover, .cam-row button:hover, .cam-pad button:hover {
+.presets button:hover, .styles button:hover, .ghost:hover {
   color: var(--text); border-color: var(--blue); background: rgba(95, 147, 192, 0.14); transform: translateY(-1px);
 }
 .presets button.active, .styles button.active {
@@ -245,13 +254,13 @@ select:focus, input[type="number"]:focus, input[type="range"]:focus { outline: n
 .switch input:checked + span { background: rgba(216,178,92,.35); border-color: var(--gold); }
 .switch input:checked + span::before { transform: translateX(1.18rem); background: var(--gold-2); }
 
-.cam-section { margin-bottom: 0.8rem; }
-.cam-label { display: block; font-size: 0.64rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.35rem; }
-.cam-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.28rem; }
-.cam-pad button { aspect-ratio: 1.55; padding: 0; }
-.cam-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.28rem; }
-.cam-row button { padding: 0.38rem 0.2rem; font-size: 0.68rem; }
-.camera-panel .hint { margin-bottom: 0; }
+/* keybinding legend that replaces the old camera button panel */
+.keylist { display: grid; gap: 0.42rem; margin: 0; }
+.keylist > div { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; border-bottom: 1px solid var(--line); padding-bottom: 0.38rem; }
+.keylist > div:last-child { border-bottom: 0; padding-bottom: 0; }
+.keylist dt { margin: 0; color: var(--text); font-size: 0.8rem; }
+.keylist dd { margin: 0; color: var(--muted); font-size: 0.78rem; text-align: right; }
+.keylist kbd { font: inherit; font-size: 0.72rem; padding: 0.05rem 0.32rem; border: 1px solid var(--line-2); border-radius: 4px; background: var(--bg-1); color: var(--text); }
 
 /* ---------- viewport ---------- */
 .viewfinder { position: relative; padding: 0.5rem; border-radius: 0.7rem; background: #05090d; border: 1px solid var(--line); }
@@ -282,9 +291,26 @@ select:focus, input[type="number"]:focus, input[type="range"]:focus { outline: n
 .viewfinder:fullscreen .viewer { height: 100vh; border-radius: 0; }
 .viewfinder:fullscreen .bracket { width: 1.6rem; height: 1.6rem; }
 
-.viewer-toolbar { display: flex; justify-content: space-between; align-items: center; margin: 0.7rem 0; gap: 0.6rem; flex-wrap: wrap; }
+/* unified view HUD: one set of view-type buttons, overlaid on the viewer so it
+   is present in both the normal view and fullscreen */
+.view-hud {
+  position: absolute; top: 0.7rem; left: 0.7rem; right: 0.7rem;
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 0.5rem; flex-wrap: wrap; z-index: 4; pointer-events: none;
+}
+.view-hud > * { pointer-events: auto; }
 .styles { display: flex; gap: 0.25rem; flex-wrap: wrap; }
-.toolbar-right { display: flex; gap: 0.4rem; }
+.view-hud .styles {
+  background: rgba(8, 14, 20, 0.72); border: 1px solid var(--line);
+  border-radius: 0.55rem; padding: 0.3rem; backdrop-filter: blur(6px);
+}
+.view-hud-right { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.view-keys {
+  color: var(--muted); font-size: 0.72rem; background: rgba(8, 14, 20, 0.72);
+  border: 1px solid var(--line); border-radius: 0.5rem; padding: 0.36rem 0.55rem;
+  backdrop-filter: blur(6px); white-space: nowrap;
+}
+.viewfinder:fullscreen .view-hud { top: 1rem; left: 1rem; right: 1rem; }
 
 .error-banner {
   margin-bottom: 0.7rem; padding: 0.75rem 0.9rem; border-radius: 0.55rem;
