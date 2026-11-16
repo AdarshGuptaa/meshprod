@@ -264,8 +264,8 @@ button.primary .icon { color: var(--gold-2); }
 button.primary:hover { transform: translateY(-1px); box-shadow: 0 12px 26px rgba(0,0,0,.4), 0 0 18px rgba(216,178,92,.18); }
 button.primary:disabled { opacity: .5; cursor: not-allowed; transform: none; }
 
-.run-links { margin-top: 0.6rem; display: flex; gap: 0.6rem; flex-wrap: wrap; }
-.run-links a { color: var(--blue-2); font-size: 0.72rem; font-weight: 600; text-decoration: none; border-bottom: 1px solid var(--gold); }
+.run-links { margin-top: 0.6rem; display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.run-links .ghost { flex: 1 1 auto; font-size: 0.78rem; padding: 0.48rem 0.6rem; }
 
 /* ---------- inspector + camera ---------- */
 .rail { display: grid; gap: 1rem; position: sticky; top: 5.2rem; }
