@@ -60,6 +60,8 @@ pub struct Config {
     pub min_component_faces: usize,
     /// In-scene Tag36h11 edge length in metres (0 = up-to-scale).
     pub scale_tag_m: f64,
+    /// Isolate the orbit-centered object from the background before fusion.
+    pub isolate_object: bool,
 }
 
 impl Default for Config {
@@ -100,6 +102,7 @@ impl Default for Config {
             target_faces: 100_000,
             min_component_faces: 200,
             scale_tag_m: 0.0,
+            isolate_object: false,
         }
     }
 }
@@ -687,6 +690,9 @@ fn build_args(c: &Config) -> Vec<String> {
     opt("--min-component-faces", c.min_component_faces.to_string());
     if c.scale_tag_m > 0.0 {
         opt("--scale-tag", c.scale_tag_m.to_string());
+    }
+    if c.isolate_object {
+        a.push("--isolate-object".to_string());
     }
     for (on, flag) in [
         (c.geo_verify, "--geo-verify"),

@@ -1042,9 +1042,36 @@ pub(crate) fn sample_rgb_bilinear(
 ///
 /// Returns the number of points removed.
 pub fn auto_crop_largest(cloud: &mut DenseCloud, voxel: f64) -> usize {
-    use std::collections::{HashMap, VecDeque};
     if cloud.points.len() < 16 || voxel <= 0.0 {
         return 0;
+    }
+    let keep = largest_component_mask(&cloud.points, voxel);
+    if keep.iter().all(|&k| k) {
+        return 0;
+    }
+    let mut points = Vec::new();
+    let mut colors = Vec::new();
+    for (i, p) in cloud.points.iter().enumerate() {
+        if keep[i] {
+            points.push(*p);
+            colors.push(cloud.colors[i]);
+        }
+    }
+    let removed = cloud.points.len() - points.len();
+    cloud.points = points;
+    cloud.colors = colors;
+    removed
+}
+
+/// Mask of the largest 26-connected voxel component of `points`.
+///
+/// Voxelizes at `voxel`, flood-fills occupied voxels and marks the points of the
+/// biggest component. Deterministic: sorted voxel keys, fixed neighbour order.
+pub fn largest_component_mask(points: &[[f64; 3]], voxel: f64) -> Vec<bool> {
+    use std::collections::{HashMap, HashSet, VecDeque};
+    let mut keep = vec![false; points.len()];
+    if points.len() < 16 || voxel <= 0.0 {
+        return keep;
     }
     let key = |p: &[f64; 3]| -> (i32, i32, i32) {
         (
@@ -1054,16 +1081,15 @@ pub fn auto_crop_largest(cloud: &mut DenseCloud, voxel: f64) -> usize {
         )
     };
     let mut buckets: HashMap<(i32, i32, i32), Vec<usize>> = HashMap::new();
-    for (i, p) in cloud.points.iter().enumerate() {
+    for (i, p) in points.iter().enumerate() {
         buckets.entry(key(p)).or_default().push(i);
     }
     let mut keys: Vec<(i32, i32, i32)> = buckets.keys().copied().collect();
     keys.sort_unstable();
 
-    let mut visited: std::collections::HashSet<(i32, i32, i32)> = std::collections::HashSet::new();
+    let mut visited: HashSet<(i32, i32, i32)> = HashSet::new();
     let mut best: Vec<(i32, i32, i32)> = Vec::new();
     let mut best_size = 0usize;
-    // Deterministic order: sorted keys, fixed neighbour offsets.
     for start in &keys {
         if !visited.insert(*start) {
             continue;
@@ -1091,14 +1117,25 @@ pub fn auto_crop_largest(cloud: &mut DenseCloud, voxel: f64) -> usize {
             best = component;
         }
     }
-    if best.is_empty() || best_size == cloud.points.len() {
-        return 0;
+    if best.is_empty() || best_size == points.len() {
+        return vec![true; points.len()];
     }
-    let keep: std::collections::HashSet<(i32, i32, i32)> = best.into_iter().collect();
-    let mut points = Vec::with_capacity(best_size);
-    let mut colors = Vec::with_capacity(best_size);
+    let best: HashSet<(i32, i32, i32)> = best.into_iter().collect();
+    for (i, p) in points.iter().enumerate() {
+        keep[i] = best.contains(&key(p));
+    }
+    keep
+}
+
+/// Drop every cloud point outside `[lo - pad, hi + pad]` (per axis).
+///
+/// Returns the number of points removed.
+pub fn crop_to_bounds(cloud: &mut DenseCloud, lo: [f64; 3], hi: [f64; 3], pad: f64) -> usize {
+    let inside = |p: &[f64; 3]| (0..3).all(|a| p[a] >= lo[a] - pad && p[a] <= hi[a] + pad);
+    let mut points = Vec::new();
+    let mut colors = Vec::new();
     for (i, p) in cloud.points.iter().enumerate() {
-        if keep.contains(&key(p)) {
+        if inside(p) {
             points.push(*p);
             colors.push(cloud.colors[i]);
         }

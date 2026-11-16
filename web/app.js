@@ -18,7 +18,7 @@ const DEFAULT_CONFIG = {
   voxel_resolution: 256, trunc_voxels: 3.0, volume_smoothing: 2,
   hole_fill_iterations: 0, smooth_iterations: 8, bilateral_iterations: 2,
   needle_aspect: 0.0, target_faces: 100000, min_component_faces: 200,
-  scale_tag_m: 0,
+  scale_tag_m: 0, isolate_object: false,
 };
 
 const SCHEMA = [
@@ -94,6 +94,8 @@ const SCHEMA = [
         help: "Diffusion passes into unobserved voxels. Off by default: diffusion invents surface where no camera looked." },
       { key: "remove_plane", label: "Remove plane", type: "toggle",
         help: "RANSAC-removes the dominant plane (table, floor) from the dense cloud before fusion." },
+      { key: "isolate_object", label: "Isolate object", type: "toggle",
+        help: "Keeps the orbit-centered object (seen in the middle of most frames) and drops the background before fusion, so the TSDF volume is tight and the mesh is continuous." },
     ],
   },
   {

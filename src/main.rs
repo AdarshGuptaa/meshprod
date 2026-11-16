@@ -17,6 +17,7 @@ mod dense;
 mod dense_sgm;
 mod error;
 mod features;
+mod foreground;
 mod matching;
 mod mesh;
 mod mesh_ply;
@@ -235,6 +236,22 @@ struct Args {
     /// keep only the largest connected component of the dense cloud
     #[argh(switch)]
     auto_crop: bool,
+
+    /// isolate the orbit-centered object from the table/background before fusion
+    #[argh(switch)]
+    isolate_object: bool,
+
+    /// min registered views observing an object point (with --isolate-object)
+    #[argh(option, default = "6")]
+    object_support: usize,
+
+    /// min fraction of sightings that must be image-central (with --isolate-object)
+    #[argh(option, default = "0.6")]
+    object_centrality: f64,
+
+    /// central-disk radius as a fraction of the image half-diagonal (with --isolate-object)
+    #[argh(option, default = "0.35")]
+    object_central_radius: f64,
 
     /// translate the outputs so their centre is the world origin
     #[argh(switch)]
@@ -644,8 +661,52 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         );
     }
 
+    // Optional foreground isolation: keep the orbited object, drop the
+    // environment. The mask trims the sparse cloud and gives the dense stage a
+    // tight box so the table/background cannot inflate the TSDF volume.
+    let object = if args.isolate_object {
+        let cfg = foreground::ForegroundConfig {
+            support_min: args.object_support,
+            centrality_min: args.object_centrality,
+            central_radius_frac: args.object_central_radius,
+            ..Default::default()
+        };
+        let iso_cams = vec![reconstruction::make_camera(fx, fy, cx, cy); n_frames];
+        let t = Instant::now();
+        match foreground::isolate_object(&reconstruction, &iso_cams, (frame_w, frame_h), &cfg) {
+            Some(region) => {
+                eprintln!(
+                    "[isolate] kept {}/{} sparse points, object box {:.3}x{:.3}x{:.3} in {:.1}s",
+                    region.kept,
+                    reconstruction.points.len(),
+                    region.hi[0] - region.lo[0],
+                    region.hi[1] - region.lo[1],
+                    region.hi[2] - region.lo[2],
+                    t.elapsed().as_secs_f64()
+                );
+                Some(region)
+            }
+            None => {
+                eprintln!(
+                    "  warning: object isolation found no confident cluster; keeping the whole scene"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // 6. Export the sparse cloud, then continue to the dense stages.
-    let vertices = ply_writer::build_vertices(&reconstruction, &observation_colors);
+    let mut vertices = ply_writer::build_vertices(&reconstruction, &observation_colors);
+    if let Some(region) = &object {
+        vertices = vertices
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| region.keep.get(*i).copied().unwrap_or(false))
+            .map(|(_, v)| v)
+            .collect();
+    }
     let sparse_path = if args.sparse_only {
         output_path.clone()
     } else {
@@ -755,6 +816,35 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     }
 
     let mut cloud = dense::dense_cloud(&maps, &cameras, &reconstruction.views, &rgb_frames);
+    let mut voxel_resolution = args.voxel_resolution;
+    let full_extent = longest_extent(&cloud.points);
+    if let Some(region) = &object {
+        let d = [
+            region.hi[0] - region.lo[0],
+            region.hi[1] - region.lo[1],
+            region.hi[2] - region.lo[2],
+        ];
+        let pad = 0.15 * (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-9);
+        let t = Instant::now();
+        let removed = dense::crop_to_bounds(&mut cloud, region.lo, region.hi, pad);
+        eprintln!(
+            "  object crop: removed {removed} background points, {} remain in {:.1}s",
+            cloud.points.len(),
+            t.elapsed().as_secs_f64()
+        );
+        // A tight box at the configured resolution over-resolves the noisy depth
+        // and shatters the surface. Keep the voxel size at the full-scene scale.
+        if let (Some(full), Some(obj)) = (full_extent, longest_extent(&cloud.points)) {
+            if full > 1e-9 && obj > 1e-9 {
+                let scaled = (args.voxel_resolution as f64 * obj / full).round() as usize;
+                voxel_resolution = scaled.clamp(32, args.voxel_resolution);
+                eprintln!(
+                    "  object volume: {voxel_resolution} voxels across {obj:.3} (was {}) to keep the voxel size",
+                    args.voxel_resolution
+                );
+            }
+        }
+    }
     if args.remove_plane && cloud.points.len() >= 16 {
         let mut lo = cloud.points[0];
         let mut hi = cloud.points[0];
@@ -807,8 +897,8 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     // 7. Fuse the depth maps into a signed distance field.
     error::set_stage(8);
     eprintln!(
-        "[7/9] fusing TSDF (resolution {}, truncation {:.1} voxels)",
-        args.voxel_resolution, args.trunc_voxels
+        "[7/9] fusing TSDF (resolution {voxel_resolution}, truncation {:.1} voxels)",
+        args.trunc_voxels
     );
     let t = Instant::now();
     let volume = tsdf::fuse(
@@ -817,7 +907,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         &reconstruction.views,
         &cloud.points,
         &tsdf::TsdfConfig {
-            resolution: args.voxel_resolution,
+            resolution: voxel_resolution,
             trunc_voxels: args.trunc_voxels,
             depth_noise_relative: (checked > 0).then_some(median_err),
             ncc_min: args.ncc_min,
@@ -1207,6 +1297,21 @@ fn sparse_tracks(
     );
     error::progress(5, 1, 1);
     Ok(tracks)
+}
+
+/// Longest axis of the axis-aligned bounding box of `points`.
+fn longest_extent(points: &[[f64; 3]]) -> Option<f64> {
+    if points.is_empty() {
+        return None;
+    }
+    let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for p in points {
+        for a in 0..3 {
+            lo[a] = lo[a].min(p[a]);
+            hi[a] = hi[a].max(p[a]);
+        }
+    }
+    Some((hi[0] - lo[0]).max(hi[1] - lo[1]).max(hi[2] - lo[2]))
 }
 
 /// Largest bounding-box span of the reconstructed points, in whatever world
