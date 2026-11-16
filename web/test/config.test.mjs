@@ -49,11 +49,10 @@ for (const name of ["fast", "balanced", "quality"]) {
 assert.equal(PRESETS.auto.auto_config, true, "auto.auto_config must be true");
 fill("quality presets pin auto_config", ++n);
 
-// 3) Workflow presets.
-assert.equal(PRESETS.object.isolate_object, true);
-assert.equal(PRESETS.object.remove_plane, true);
-assert.equal(PRESETS.metric.scale_tag_m, 0.1);
-fill("object + metric workflow presets", ++n);
+// 3) Workflow quick actions are present as data-action buttons.
+assert(html.includes('data-action="object"'), "missing Object scan action");
+assert(html.includes('data-action="metric"'), "missing Metric action");
+fill("workflow quick actions present", ++n);
 
 // 4) Quick toggles map to real boolean config fields.
 assert(QUICK_TOGGLES.length >= 6, "expected all major booleans");
@@ -73,8 +72,10 @@ fill("schema keys exist in DEFAULT_CONFIG", ++n);
 
 // 6) Unified UI: one view HUD, no legacy camera toolbar/panel.
 assert(html.includes('class="view-hud"'), "missing unified view HUD");
-assert(html.includes('id="quick-toggles"'), "missing quick toggles");
+assert(html.includes('class="segmented"'), "missing segmented controls");
+assert(html.includes('class="toggle-list"'), "missing toggle switch list");
 assert(html.includes('class="keylist"'), "missing keybinding legend");
+assert(!html.includes("qtoggle") && !app.includes("qtoggle"), "boxy qtoggle buttons should be gone");
 for (const gone of ["camera-panel", "viewer-toolbar", "data-cam=", 'class="cam-pad"']) {
   assert(!html.includes(gone), `legacy camera UI still present: ${gone}`);
 }

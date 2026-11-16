@@ -137,8 +137,6 @@ const PRESETS = {
   balanced: { ...DEFAULT_CONFIG, auto_config: false },
   quality: { ...DEFAULT_CONFIG, auto_config: false, frame_step: 5, dense_scale: 0.75, dense_planes: 128, voxel_resolution: 320, target_faces: 80000 },
   auto: { ...DEFAULT_CONFIG, auto_config: true },
-  object: { ...DEFAULT_CONFIG, auto_config: false, isolate_object: true, remove_plane: true },
-  metric: { ...DEFAULT_CONFIG, auto_config: false, scale_tag_m: 0.1 },
 };
 
 // Major booleans exposed as one-click toggles above the groups.
@@ -157,19 +155,23 @@ function renderQuickToggles() {
   if (!host) return;
   host.innerHTML = "";
   for (const [key, label, icon] of QUICK_TOGGLES) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "qtoggle" + (config[key] ? " on" : "");
-    b.innerHTML = `<svg class="icon"><use href="#${icon}"/></svg><span>${label}</span>`;
-    b.title = `Toggle ${label}`;
-    b.addEventListener("click", () => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "toggle-row";
+    row.setAttribute("role", "switch");
+    row.setAttribute("aria-checked", config[key] ? "true" : "false");
+    row.dataset.key = key;
+    row.innerHTML = `
+      <span class="toggle-name"><svg class="icon"><use href="#${icon}"/></svg><span>${label}</span></span>
+      <span class="track"><span class="thumb"></span></span>`;
+    row.addEventListener("click", () => {
       config[key] = !config[key];
       renderQuickToggles();
       renderGroups();
       const item = SCHEMA.flatMap((g) => g.items).find((i) => i.key === key);
       if (selectedKey && item) openDetails(item);
     });
-    host.appendChild(b);
+    host.appendChild(row);
   }
 }
 
@@ -372,6 +374,26 @@ document.querySelectorAll("[data-preset]").forEach((btn) => {
     renderQuickToggles();
     const item = SCHEMA.flatMap((g) => g.items).find((i) => i.key === selectedKey);
     if (item) openDetails(item);
+  });
+});
+
+const QUICK_ACTIONS = {
+  object: () => {
+    config.isolate_object = true;
+    config.remove_plane = true;
+  },
+  metric: () => {
+    config.scale_tag_m = 0.1;
+  },
+};
+
+document.querySelectorAll("[data-action]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    QUICK_ACTIONS[btn.dataset.action]?.();
+    renderGroups();
+    renderQuickToggles();
+    const item = SCHEMA.flatMap((g) => g.items).find((i) => i.key === selectedKey);
+    if (selectedKey && item) openDetails(item);
   });
 });
 

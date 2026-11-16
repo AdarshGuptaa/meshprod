@@ -26,7 +26,7 @@
 
 * { box-sizing: border-box; }
 
-html { font-size: clamp(15px, 0.5vw + 12.5px, 18px); }
+html { font-size: clamp(16px, 0.55vw + 13px, 20px); }
 
 html, body {
   margin: 0; min-height: 100%;
@@ -107,11 +107,11 @@ h3 { font-size: 0.82rem; }
 .status-pill.error { background: rgba(208, 122, 104, 0.18); color: var(--bad); border-color: var(--bad); }
 @keyframes pulse { 50% { opacity: 0.65; } }
 
-main { position: relative; z-index: 1; padding: 1.4rem 1.7rem 3rem; max-width: 108rem; margin: 0 auto; }
+main { position: relative; z-index: 1; padding: 1.5rem 2rem 3rem; max-width: 122rem; margin: 0 auto; }
 
 .tab-panel { display: none; }
 .tab-panel.active { display: grid; gap: 1rem; animation: panel-in .36s var(--ease); }
-#tab-studio.active { grid-template-columns: 23.5rem minmax(0, 1fr) 18rem; align-items: start; }
+#tab-studio.active { grid-template-columns: 25rem minmax(0, 1fr) 19.5rem; align-items: start; }
 #tab-trust.active { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 #tab-guide.active, #tab-credits.active, #tab-slides.active { grid-template-columns: minmax(0, 1fr); }
 @keyframes panel-in { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
@@ -122,7 +122,7 @@ main { position: relative; z-index: 1; padding: 1.4rem 1.7rem 3rem; max-width: 1
   background: linear-gradient(180deg, rgba(19, 33, 45, 0.94), rgba(14, 25, 35, 0.96));
   border: 1px solid var(--line);
   border-radius: 0.8rem;
-  padding: 1.25rem 1.35rem;
+  padding: 1.45rem 1.55rem;
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .panel::before {
@@ -135,37 +135,71 @@ main { position: relative; z-index: 1; padding: 1.4rem 1.7rem 3rem; max-width: 1
 
 .inventory { position: sticky; top: 5.2rem; max-height: calc(100vh - 6.4rem); overflow: auto; scrollbar-width: thin; }
 .inv-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; row-gap: 0.4rem; }
-.presets { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.7rem 0 0.1rem; }
-.presets button { padding: 0.42rem 0.55rem; font-size: 0.76rem; }
-.presets .icon { width: 0.9rem; height: 0.9rem; color: var(--blue-2); }
-.presets button.active .icon { color: #101b25; }
-
-.quick-toggles { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.45rem 0 0.2rem; }
-.qtoggle {
-  display: inline-flex; align-items: center; gap: 0.3rem;
-  border: 1px solid var(--line); background: rgba(255,255,255,0.03); color: var(--muted);
-  border-radius: 0.55rem; padding: 0.38rem 0.55rem; font-family: var(--sans);
-  font-size: 0.74rem; font-weight: 600; cursor: pointer;
-  transition: color .2s var(--ease), border-color .2s var(--ease), background .2s var(--ease), transform .16s var(--ease), box-shadow .2s var(--ease);
+.seg-label {
+  font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--muted); font-weight: 700; margin: 0.95rem 0 0.42rem;
 }
-.qtoggle .icon { width: 0.9rem; height: 0.9rem; color: var(--blue-2); }
-.qtoggle:hover { color: var(--text); border-color: var(--blue); background: rgba(95,147,192,0.14); transform: translateY(-1px); }
-.qtoggle.on { color: #101b25; border-color: var(--gold); background: linear-gradient(180deg, var(--gold-2), var(--gold)); box-shadow: 0 0 14px rgba(216,178,92,.28); }
-.qtoggle.on .icon { color: #101b25; }
+.segmented {
+  display: flex; gap: 0.2rem; padding: 0.25rem;
+  background: rgba(8, 14, 20, 0.55); border: 1px solid var(--line);
+  border-radius: 0.7rem;
+}
+.segmented button {
+  flex: 1; min-width: 0;
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
+  border: 0; background: transparent; color: var(--muted);
+  padding: 0.52rem 0.22rem; border-radius: 0.5rem; cursor: pointer;
+  font-family: var(--sans); font-weight: 600; font-size: 0.8rem; white-space: nowrap;
+  overflow: hidden;
+  transition: color .18s var(--ease), background .18s var(--ease);
+}
+.segmented button .icon { width: 0.9rem; height: 0.9rem; color: var(--blue-2); }
+.segmented button:hover { color: var(--text); }
+.segmented button.active,
+.segmented button.active:hover {
+  color: #101b25; background: linear-gradient(180deg, var(--gold-2), var(--gold));
+  box-shadow: 0 0 14px rgba(216, 178, 92, 0.28);
+}
+.segmented button.active .icon { color: #101b25; }
 
-.presets button, .styles button, .ghost {
+.workflow-row { display: flex; gap: 0.4rem; margin-top: 0.5rem; }
+.workflow-row .ghost { flex: 1; font-size: 0.82rem; padding: 0.52rem 0.5rem; }
+
+.toggle-list { display: grid; grid-template-columns: 1fr; }
+.toggle-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
+  background: none; border: 0; border-bottom: 1px solid var(--line);
+  padding: 0.62rem 0.05rem; cursor: pointer; color: var(--muted);
+  font-family: var(--sans); font-size: 0.92rem; font-weight: 600;
+  transition: color .18s var(--ease);
+}
+.toggle-row:hover { color: var(--text); }
+.toggle-row[aria-checked="true"] { color: var(--text); }
+.toggle-name { display: inline-flex; align-items: center; gap: 0.45rem; min-width: 0; }
+.toggle-name .icon { width: 1.05rem; height: 1.05rem; color: var(--blue-2); flex: none; }
+.track {
+  position: relative; width: 2.6rem; height: 1.4rem; flex: none;
+  border-radius: 999px; background: rgba(142, 163, 178, 0.16);
+  border: 1px solid var(--line);
+  transition: background .22s var(--ease), border-color .22s var(--ease);
+}
+.thumb {
+  position: absolute; top: 0.14rem; left: 0.16rem; width: 0.92rem; height: 0.92rem;
+  border-radius: 50%; background: var(--muted);
+  transition: transform .22s var(--ease), background .22s var(--ease);
+}
+.toggle-row[aria-checked="true"] .track { background: rgba(216, 178, 92, 0.32); border-color: var(--gold); }
+.toggle-row[aria-checked="true"] .thumb { transform: translateX(1.15rem); background: var(--gold-2); }
+
+.ghost {
   display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
   border: 1px solid var(--line); background: rgba(255, 255, 255, 0.03);
   color: var(--muted); padding: 0.5rem 0.75rem; border-radius: 0.55rem;
   font-family: var(--sans); font-size: 0.81rem; font-weight: 600; cursor: pointer;
   transition: color .2s var(--ease), border-color .2s var(--ease), background .2s var(--ease), transform .16s var(--ease), box-shadow .2s var(--ease);
 }
-.presets button:hover, .styles button:hover, .ghost:hover {
+.ghost:hover {
   color: var(--text); border-color: var(--blue); background: rgba(95, 147, 192, 0.14); transform: translateY(-1px);
-}
-.presets button.active, .styles button.active {
-  color: #101b25; border-color: var(--gold); background: linear-gradient(180deg, var(--gold-2), var(--gold));
-  box-shadow: 0 0 14px rgba(216, 178, 92, 0.28);
 }
 
 .dropzone {
@@ -306,11 +340,11 @@ select:focus, input[type="number"]:focus, input[type="range"]:focus { outline: n
   gap: 0.5rem; flex-wrap: wrap; z-index: 4; pointer-events: none;
 }
 .view-hud > * { pointer-events: auto; }
-.styles { display: flex; gap: 0.25rem; flex-wrap: wrap; }
-.view-hud .styles {
-  background: rgba(8, 14, 20, 0.72); border: 1px solid var(--line);
-  border-radius: 0.55rem; padding: 0.3rem; backdrop-filter: blur(6px);
+.view-hud .segmented {
+  background: rgba(8, 14, 20, 0.78); backdrop-filter: blur(6px);
+  flex-wrap: wrap; max-width: 100%;
 }
+.view-hud .segmented button { flex: 0 0 auto; padding: 0.5rem 0.68rem; }
 .view-hud-right { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
 .view-keys {
   color: var(--muted); font-size: 0.72rem; background: rgba(8, 14, 20, 0.72);
@@ -318,6 +352,9 @@ select:focus, input[type="number"]:focus, input[type="range"]:focus { outline: n
   backdrop-filter: blur(6px); white-space: nowrap;
 }
 .viewfinder:fullscreen .view-hud { top: 1rem; left: 1rem; right: 1rem; }
+/* The full keybinding list lives in the right rail; drop the HUD reminder
+   when the viewport is narrow so Fullscreen + PLY stay on one line. */
+@media (max-width: 1450px) { .view-keys { display: none; } }
 
 .error-banner {
   margin-bottom: 0.7rem; padding: 0.75rem 0.9rem; border-radius: 0.55rem;

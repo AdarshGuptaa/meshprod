@@ -58,15 +58,19 @@
         <div class="inv-head">
           <h2><svg class="icon"><use href="#i-layers"/></svg>Loadout</h2>
         </div>
-        <div class="presets" id="presets">
+        <div class="seg-label">Preset</div>
+        <div class="segmented" id="presets">
           <button data-preset="fast"><svg class="icon"><use href="#i-spark"/></svg>Fast</button>
           <button data-preset="balanced" class="active"><svg class="icon"><use href="#i-layers"/></svg>Balanced</button>
           <button data-preset="quality"><svg class="icon"><use href="#i-check"/></svg>Quality</button>
           <button data-preset="auto"><svg class="icon"><use href="#i-gear"/></svg>Auto</button>
-          <button data-preset="object"><svg class="icon"><use href="#i-cube"/></svg>Object</button>
-          <button data-preset="metric"><svg class="icon"><use href="#i-ruler"/></svg>Metric</button>
         </div>
-        <div class="quick-toggles" id="quick-toggles"></div>
+        <div class="workflow-row" id="workflows">
+          <button class="ghost" data-action="object"><svg class="icon"><use href="#i-cube"/></svg>Object scan</button>
+          <button class="ghost" data-action="metric"><svg class="icon"><use href="#i-ruler"/></svg>Metric</button>
+        </div>
+        <div class="seg-label">Options</div>
+        <div class="toggle-list" id="quick-toggles"></div>
 
         <label class="dropzone" id="dropzone">
           <input type="file" id="video-input" accept="video/*" hidden />
@@ -93,7 +97,7 @@
             </div>
           </div>
           <div class="view-hud">
-            <div class="styles" id="styles">
+            <div class="segmented" id="styles">
               <button data-style="colour" class="active">Colour</button>
               <button data-style="clay">Clay</button>
               <button data-style="normals">Normals</button>
