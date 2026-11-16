@@ -584,3 +584,32 @@ body.static .slide .s-figure { opacity: 1 !important; transform: none !important
 .plan-lines strong { font-family: var(--mono); font-size: 0.84rem; font-weight: 600; color: var(--gold-2); }
 .plan-lines span { font-size: 0.68rem; color: var(--muted); white-space: nowrap; }
 @media (max-width: 1150px) { .plan-widget { display: none; } }
+
+/* capture guidance box in the Loadout */
+.capture-tips {
+  margin: 0.85rem 0;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--line);
+  border-right: 2px solid var(--gold);
+  border-radius: 0.6rem;
+  background: linear-gradient(180deg, rgba(216, 178, 92, 0.06), rgba(8, 14, 20, 0.35));
+}
+.capture-tips h3 {
+  display: flex; align-items: center; gap: 0.4rem;
+  font-size: 0.86rem; color: var(--gold-2); margin-bottom: 0.5rem;
+}
+.capture-tips h3 .icon { width: 1rem; height: 1rem; color: var(--gold); }
+.capture-tips ul { margin: 0; padding-left: 1.1rem; display: grid; gap: 0.34rem; }
+.capture-tips li { font-size: 0.8rem; line-height: 1.4; color: var(--muted); }
+.capture-tips strong { color: var(--text); }
+
+/* quick view-snap buttons in the View panel */
+.view-snaps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.3rem; margin-bottom: 0.8rem; }
+.view-snaps button {
+  border: 1px solid var(--line); background: rgba(255, 255, 255, 0.03);
+  color: var(--muted); border-radius: 0.45rem; padding: 0.42rem 0.3rem;
+  font-family: var(--sans); font-size: 0.74rem; font-weight: 600; cursor: pointer;
+  transition: color .18s var(--ease), border-color .18s var(--ease), background .18s var(--ease);
+}
+.view-snaps button:hover { color: var(--text); border-color: var(--blue); background: rgba(95, 147, 192, 0.14); }
+.view-snaps button.wide { grid-column: 1 / -1; }

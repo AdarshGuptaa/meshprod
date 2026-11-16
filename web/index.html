@@ -86,6 +86,18 @@
           <span id="drop-sub">or click to choose · local processing only</span>
         </label>
 
+        <div class="capture-tips" id="capture-tips">
+          <h3><svg class="icon"><use href="#i-info"/></svg>Film it right</h3>
+          <ul>
+            <li><strong>Fill the frame</strong> — the object should cover most of the view.</li>
+            <li><strong>Move, don't zoom</strong> — walk a slow orbit; pure panning has no parallax.</li>
+            <li><strong>Add texture</strong> — plain white, glossy or dark surfaces starve the tracker. A patterned mat helps.</li>
+            <li><strong>Diffuse light</strong> — avoid hard glare on shiny parts.</li>
+            <li><strong>Stay sharp</strong> — lock focus, 30 fps, no motion blur; prop the phone.</li>
+            <li><strong>Known size</strong> — tape a Tag36h11 in frame for metric scale.</li>
+          </ul>
+        </div>
+
         <div id="config-groups"></div>
 
         <button class="primary" id="run-button"><svg class="icon"><use href="#i-play"/></svg>Run reconstruction</button>
@@ -136,6 +148,15 @@
         </section>
         <section class="panel view-legend">
           <h2><svg class="icon"><use href="#i-camera"/></svg>View</h2>
+          <div class="view-snaps" id="view-snaps">
+            <button data-view="front">Front</button>
+            <button data-view="back">Back</button>
+            <button data-view="left">Left</button>
+            <button data-view="right">Right</button>
+            <button data-view="top">Top</button>
+            <button data-view="bottom">Bottom</button>
+            <button data-view="fit" class="wide">Frame</button>
+          </div>
           <div class="keylist">
             <div class="keyrow"><span class="keychord"><svg class="icon"><use href="#i-rotate"/></svg><kbd>MMB</kbd><span>drag</span></span><span class="keyact">Orbit</span></div>
             <div class="keyrow"><span class="keychord"><svg class="icon"><use href="#i-expand"/></svg><kbd>Shift</kbd><span>+</span><kbd>MMB</kbd></span><span class="keyact">Pan</span></div>

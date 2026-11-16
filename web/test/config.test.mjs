@@ -121,4 +121,10 @@ assert(app.includes("meshprod-config.json"), "config export must download a .jso
 assert(app.includes("renderRunLinks") && app.includes("_${kind}.ply"), "artifact PLY links not wired");
 fill("exports have real filenames", ++n);
 
+// 12) Capture guidance + view-snap controls.
+assert(html.includes('class="capture-tips"'), "missing capture tips box");
+assert((html.match(/data-view=/g) || []).length >= 6, "missing view-snap buttons");
+assert(app.includes("orientGeometry") && app.includes("minPolarAngle"), "viewer orientation guards missing");
+fill("capture tips + view snaps", ++n);
+
 console.log(`\nUI config tests passed (${n}).`);

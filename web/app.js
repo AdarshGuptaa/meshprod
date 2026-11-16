@@ -1119,6 +1119,10 @@ controls.zoomSpeed = 1.35;
 controls.panSpeed = 1.15;
 controls.rotateSpeed = 0.9;
 controls.screenSpacePanning = true;
+// Keep off the exact poles: at phi 0/pi the azimuth is degenerate and a drag
+// spins in an unexpected plane (the "rotation feels off" symptom).
+controls.minPolarAngle = 0.06;
+controls.maxPolarAngle = Math.PI - 0.06;
 // Blender-style: middle-drag orbits, Shift+middle-drag pans, wheel zooms.
 // Left stays orbit (trackpads have no middle button) and right stays pan.
 controls.mouseButtons = {
@@ -1160,6 +1164,7 @@ function loadMesh() {
   loader.load(
     `/api/mesh/mesh?t=${Date.now()}`,
     (geometry) => {
+      orientGeometry(geometry);
       geometry.computeVertexNormals();
       originalColors = geometry.attributes.color ? Float32Array.from(geometry.attributes.color.array) : null;
       if (current) {
@@ -1178,6 +1183,24 @@ function loadMesh() {
     undefined,
     () => appendLog("mesh load failed"),
   );
+}
+
+// SfM's world axes are the bootstrap camera's (Y points down), so the object's
+// true "up" is often the table normal on a different axis. Rotate the clearly
+// thinnest axis to +Y so the object sits flat and orbiting spins it
+// horizontally instead of rolling it around its length.
+function orientGeometry(geometry) {
+  geometry.computeBoundingBox();
+  const size = new THREE.Vector3();
+  geometry.boundingBox.getSize(size);
+  const spans = [size.x, size.y, size.z];
+  if (!spans.every((v) => Number.isFinite(v) && v > 0)) return;
+  const sorted = [...spans].sort((a, b) => a - b);
+  if (sorted[0] > 0.6 * sorted[1]) return; // not clearly flat: keep as-is
+  const thin = spans.indexOf(sorted[0]);
+  const from = new THREE.Vector3(thin === 0 ? 1 : 0, thin === 1 ? 1 : 0, thin === 2 ? 1 : 0);
+  const q = new THREE.Quaternion().setFromUnitVectors(from, new THREE.Vector3(0, 1, 0));
+  geometry.applyMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(q));
 }
 
 function fitCamera(geometry) {
@@ -1246,16 +1269,27 @@ function panBy(dx, dy) {
 }
 
 function setView(kind) {
+  if (kind === "fit") {
+    if (current) fitCamera(current.geometry);
+    return;
+  }
   const dirs = {
-    front: new THREE.Vector3(0, 0.08, 1),
-    top: new THREE.Vector3(0, 1, 0.02),
-    side: new THREE.Vector3(1, 0.08, 0),
+    front: [0, 0.05, 1],
+    back: [0, 0.05, -1],
+    right: [1, 0.05, 0],
+    left: [-1, 0.05, 0],
+    top: [0, 1, 0.0001],
+    bottom: [0, -1, 0.0001],
   };
-  const dir = dirs[kind];
-  if (!dir) return;
-  const position = camCenter.clone().addScaledVector(dir.normalize(), camRadius * 1.35);
-  tweenCamera(position, camCenter);
+  const d = dirs[kind];
+  if (!d) return;
+  const dir = new THREE.Vector3(...d).normalize();
+  tweenCamera(camCenter.clone().addScaledVector(dir, camRadius * 1.35), camCenter);
 }
+
+document.querySelectorAll("[data-view]").forEach((btn) => {
+  btn.addEventListener("click", () => setView(btn.dataset.view));
+});
 
 const camActions = {
   "orbit-up": () => orbitBy(0, -0.16),
@@ -1362,7 +1396,7 @@ document.querySelectorAll("[data-style]").forEach((btn) => {
   });
 });
 
-controls.addEventListener("start", () => { controls.autoRotate = false; });
+controls.addEventListener("start", () => { controls.autoRotate = false; camTween = null; });
 
 function resizeViewer() {
   const { clientWidth: w, clientHeight: h } = viewerHost;
