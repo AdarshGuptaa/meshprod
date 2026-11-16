@@ -153,6 +153,16 @@ pub struct RunSummary {
     pub cost: String,
 }
 
+/// Capture plan emitted by the pipeline (`PLAN ...`), used by the UI's ETA.
+#[derive(Debug, Clone, Default, Serialize)]
+struct Plan {
+    frames: usize,
+    width: usize,
+    height: usize,
+    fps: f64,
+    duration_s: f64,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 struct ProgressView {
     stage: usize,
@@ -174,6 +184,8 @@ struct Job {
     pid: Option<u32>,
     /// Set by /api/cancel; the run thread reports "cancelled", not an error.
     cancel_requested: bool,
+    /// Capture plan reported after decode (frames, resolution, fps, duration).
+    plan: Option<Plan>,
 }
 
 #[derive(Clone)]
@@ -212,6 +224,7 @@ pub fn serve(port: u16) -> Result<(), Box<dyn std::error::Error>> {
             output: None,
             pid: None,
             cancel_requested: false,
+            plan: None,
         })),
         dir: dir.clone(),
         history: Arc::new(Mutex::new(seeded)),
@@ -338,6 +351,7 @@ struct StatusView {
     report: Option<serde_json::Value>,
     video: Option<String>,
     kinds: Vec<String>,
+    plan: Option<Plan>,
 }
 
 async fn status(State(app): State<App>) -> Json<StatusView> {
@@ -364,6 +378,7 @@ async fn status(State(app): State<App>) -> Json<StatusView> {
             .and_then(|p| p.file_name())
             .map(|s| s.to_string_lossy().into_owned()),
         kinds,
+        plan: job.plan.clone(),
     })
 }
 
@@ -450,6 +465,7 @@ async fn run(
             output: None,
             pid: None,
             cancel_requested: false,
+            plan: None,
         };
     }
 
@@ -789,6 +805,24 @@ fn build_args(c: &Config) -> Vec<String> {
 }
 
 fn parse_line(line: &str, job: &mut Job) {
+    if let Some(rest) = line.strip_prefix("PLAN ") {
+        let mut plan = Plan::default();
+        for kv in rest.split_whitespace() {
+            let Some((k, v)) = kv.split_once('=') else {
+                continue;
+            };
+            match k {
+                "frames" => plan.frames = v.parse().unwrap_or(0),
+                "width" => plan.width = v.parse().unwrap_or(0),
+                "height" => plan.height = v.parse().unwrap_or(0),
+                "fps" => plan.fps = v.parse().unwrap_or(0.0),
+                "duration_s" => plan.duration_s = v.parse().unwrap_or(0.0),
+                _ => {}
+            }
+        }
+        job.plan = Some(plan);
+        return;
+    }
     if let Some(rest) = line.strip_prefix("PROGRESS ") {
         let mut parts = rest.split_whitespace();
         let (Some(stage), Some(done), Some(total)) = (parts.next(), parts.next(), parts.next())
@@ -976,6 +1010,33 @@ mod tests {
         }
         assert_eq!(value_of(&args, "--object-support"), Some("4"));
         assert_eq!(value_of(&args, "--object-centrality"), Some("0.7"));
+    }
+
+    /// The pipeline's PLAN line becomes the UI's ETA input.
+    #[test]
+    fn parse_line_reads_plan() {
+        let mut job = Job {
+            status: String::new(),
+            stage: 0,
+            progress: None,
+            log: Vec::new(),
+            stats: Stats::default(),
+            error: None,
+            report: None,
+            video: None,
+            output: None,
+            pid: None,
+            cancel_requested: false,
+            plan: None,
+        };
+        parse_line(
+            "PLAN frames=63 width=1280 height=720 fps=30.000 duration_s=20.900",
+            &mut job,
+        );
+        let plan = job.plan.expect("plan parsed");
+        assert_eq!((plan.frames, plan.width, plan.height), (63, 1280, 720));
+        assert!((plan.fps - 30.0).abs() < 1e-6);
+        assert!((plan.duration_s - 20.9).abs() < 1e-6);
     }
 
     /// Cancelling must actually stop the child process.

@@ -233,6 +233,22 @@ pub fn read_frames(path: &Path, frame_step: usize) -> Result<VideoFrames, Box<dy
         }
     }
 
+    // Report the capture plan so the UI can estimate the run time from real
+    // frame count, resolution, frame rate and duration.
+    let (pw, ph) = rgb_frames
+        .first()
+        .map(|f| (f.width(), f.height()))
+        .unwrap_or((0, 0));
+    let fps = reader.get_fps().unwrap_or(0.0);
+    let duration_s = reader
+        .get_duration()
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    eprintln!(
+        "PLAN frames={} width={} height={} fps={:.3} duration_s={:.3}",
+        stats.frames_kept, pw, ph, fps, duration_s
+    );
+
     reader.close()?;
 
     stats.summary();

@@ -109,4 +109,10 @@ assert(html.includes('id="cancel-run"'), "missing cancel button");
 assert(app.includes('"/api/cancel"'), "cancel button is not wired to /api/cancel");
 fill("cancel button wired", ++n);
 
+// 10) Header ETA + preview widget.
+assert(html.includes('id="plan-preview"'), "missing preview canvas");
+assert(html.includes('id="eta-value"') && html.includes('id="plan-meta"'), "missing ETA/meta text");
+assert(app.includes("estimateEtaSeconds") && app.includes("updatePlanWidget"), "missing ETA model");
+fill("ETA + preview widget wired", ++n);
+
 console.log(`\nUI config tests passed (${n}).`);

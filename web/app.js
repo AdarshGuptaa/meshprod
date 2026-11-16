@@ -204,6 +204,10 @@ let chartData = SEED_HISTORY;
 let videoFile = null;
 let selectedKey = null;
 let viewerActive = true;
+let previewMeta = null;
+let currentPlan = null;
+let runStartMs = null;
+let statusRunning = false;
 
 /* ---------- tabs ---------- */
 const tabs = [...document.querySelectorAll(".tab")];
@@ -439,8 +443,115 @@ dropzone.addEventListener("drop", (e) => {
 function setVideo(file) {
   if (!file) return;
   videoFile = file;
+  currentPlan = null;
   document.getElementById("drop-title").textContent = file.name;
   document.getElementById("drop-sub").textContent = `${(file.size / 1048576).toFixed(1)} MB · ready to run`;
+  loadPreview(file);
+  updatePlanWidget();
+}
+
+/* ---------- preview + ETA ---------- */
+function loadPreview(file) {
+  const canvas = document.getElementById("plan-preview");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const url = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  video.preload = "auto";
+  video.muted = true;
+  video.playsInline = true;
+  video.src = url;
+  const grabMeta = () => {
+    previewMeta = {
+      width: video.videoWidth,
+      height: video.videoHeight,
+      duration: Number.isFinite(video.duration) ? video.duration : 0,
+    };
+    updatePlanWidget();
+  };
+  const draw = () => {
+    if (!video.videoWidth || !video.videoHeight) return;
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const scale = Math.min(cw / video.videoWidth, ch / video.videoHeight);
+    const w = video.videoWidth * scale;
+    const h = video.videoHeight * scale;
+    ctx.fillStyle = "#0a1219";
+    ctx.fillRect(0, 0, cw, ch);
+    ctx.drawImage(video, (cw - w) / 2, (ch - h) / 2, w, h);
+  };
+  video.addEventListener("loadedmetadata", () => {
+    grabMeta();
+    try {
+      video.currentTime = Math.min(1, (previewMeta.duration || 0) * 0.5);
+    } catch {
+      /* seek unsupported */
+    }
+  });
+  video.addEventListener("loadeddata", draw);
+  video.addEventListener("seeked", () => {
+    draw();
+    URL.revokeObjectURL(url);
+  });
+  video.addEventListener("error", () => URL.revokeObjectURL(url));
+}
+
+// Rough cost model (seconds), calibrated on the measured runs: the dense sweep
+// dominates and scales with frames x pixels x dense_scale^2 x planes.
+function estimateEtaSeconds(plan, cfg) {
+  const frames = Math.max(1, plan.frames || 0);
+  const pixels = Math.max(1, plan.width || 0) * Math.max(1, plan.height || 0);
+  const scale = Math.max(0.05, Number(cfg.dense_scale) || 0.5);
+  const planes = Math.max(16, Number(cfg.dense_planes) || 96);
+  const decode = (plan.duration_s || 0) * 0.3;
+  const sparse = frames * 0.1;
+  const dense = frames * pixels * scale * scale * planes * 4e-8;
+  const tsdfMesh = 8 + (Number(cfg.voxel_resolution) || 256) * 0.02;
+  return decode + sparse + dense + tsdfMesh;
+}
+
+function preliminaryPlan() {
+  if (!previewMeta || !previewMeta.width) return null;
+  const fps = 30; // the real rate arrives from the pipeline's PLAN line
+  const step = Math.max(1, Number(config.frame_step) || 1);
+  return {
+    frames: Math.max(1, Math.round(((previewMeta.duration || 0) * fps) / step)),
+    width: previewMeta.width,
+    height: previewMeta.height,
+    fps,
+    duration_s: previewMeta.duration || 0,
+  };
+}
+
+function fmtDuration(seconds) {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r ? `${m}m ${r}s` : `${m}m`;
+}
+
+function updatePlanWidget() {
+  const etaEl = document.getElementById("eta-value");
+  const metaEl = document.getElementById("plan-meta");
+  if (!etaEl || !metaEl) return;
+  const plan = currentPlan || preliminaryPlan();
+  if (!plan || !plan.frames) {
+    etaEl.textContent = "—";
+    metaEl.textContent = previewMeta ? "estimating…" : "no video";
+    return;
+  }
+  const total = estimateEtaSeconds(plan, config);
+  const fps = plan.fps > 0 ? Math.round(plan.fps) : null;
+  const base = `${plan.frames} fr · ${plan.width}×${plan.height}`;
+  metaEl.textContent = fps ? `${base} · ${fps} fps` : base;
+  if (statusRunning && runStartMs) {
+    const elapsed = (Date.now() - runStartMs) / 1000;
+    etaEl.textContent = `ETA ${fmtDuration(total - elapsed)}`;
+  } else {
+    etaEl.textContent = `~${fmtDuration(total)}`;
+  }
 }
 
 const runButton = document.getElementById("run-button");
@@ -457,6 +568,7 @@ runButton.addEventListener("click", async () => {
   fd.append("config", JSON.stringify(config));
   runButton.disabled = true;
   lastMeshKey = null;
+  runStartMs = Date.now();
   hideError();
   try {
     const res = await fetch("/api/run", { method: "POST", body: fd });
@@ -509,6 +621,10 @@ function applyStatus(data) {
     cancelButton.disabled = false;
     cancelButton.querySelector("span").textContent = "Cancel run";
   }
+  statusRunning = running;
+  if (data.plan) currentPlan = data.plan;
+  if (!running) runStartMs = null;
+  updatePlanWidget();
   if (data.status === "done" && stats.faces) {
     const key = `${stats.faces}-${stats.seconds}`;
     if (key !== lastMeshKey) {
@@ -1261,3 +1377,4 @@ async function syncWithServer() {
 
 firstPaint();
 syncWithServer();
+setInterval(updatePlanWidget, 1000);
