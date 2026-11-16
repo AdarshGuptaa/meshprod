@@ -142,7 +142,10 @@ these captures, so it stays opt-in.
 9. **Attributes**: normals from the TSDF gradient, colours by projecting each
    vertex into the source frames.
 
-`docs/pipeline.md` explains the theory of every stage.
+`docs/pipeline.md` explains the theory of every stage; `docs/PROCESS.md` is
+the full end-to-end process with research citations and the iteration history;
+`docs/preset-matrix.md` measures the four presets; `docs/upstream-kornia-issues.md`
+tracks work that belongs in kornia-rs.
 
 ## CLI (main flags)
 
@@ -159,6 +162,7 @@ these captures, so it stays opt-in.
 | `--sprt` | SPRT early rejection during PnP |
 | `--sparse-only` | stop after the sparse cloud |
 | `--remove-plane` | RANSAC-remove the dominant plane (table/floor) before fusion |
+| `--isolate-object` | keep only the orbit-centered object (central + well-supported sparse points) before fusion |
 | `--dense-scale` | depth-map resolution relative to source (0.5 default) |
 | `--dense-planes` / `--dense-neighbors` / `--ncc-min` | plane-sweep quality knobs |
 | `--cost ncc\|census\|sgm` | photometric cost (SGM regularizes low-texture regions) |
