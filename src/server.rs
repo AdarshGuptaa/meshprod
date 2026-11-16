@@ -827,3 +827,118 @@ fn parse_line(line: &str, job: &mut Job) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn has(args: &[String], flag: &str) -> bool {
+        args.iter().any(|a| a == flag)
+    }
+
+    fn value_of<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .map(String::as_str)
+    }
+
+    /// Every UI-editable field must reach the CLI; this is the server -> CLI link.
+    #[test]
+    fn build_args_forwards_every_field() {
+        let mut c = Config::default();
+        let args = build_args(&c);
+
+        // Every value field, by its derived flag.
+        for flag in [
+            "--fx",
+            "--fy",
+            "--cx",
+            "--cy",
+            "--detector",
+            "--frame-step",
+            "--n-features",
+            "--match-window",
+            "--ratio",
+            "--geo-threshold",
+            "--geo-min-inliers",
+            "--wide-baseline",
+            "--dense-scale",
+            "--dense-planes",
+            "--dense-window",
+            "--dense-neighbors",
+            "--ncc-min",
+            "--lr-required",
+            "--cost",
+            "--sgm-paths",
+            "--voxel-resolution",
+            "--trunc-voxels",
+            "--volume-smoothing",
+            "--hole-fill-iterations",
+            "--smooth-iterations",
+            "--bilateral-iterations",
+            "--needle-aspect",
+            "--target-faces",
+            "--min-component-faces",
+            "--cache-dir",
+        ] {
+            assert!(has(&args, flag), "missing {flag}");
+        }
+
+        // Boolean defaults: on -> flag present, off -> absent.
+        for flag in ["--geo-verify", "--sprt", "--auto-config"] {
+            assert!(has(&args, flag), "missing default-on {flag}");
+        }
+        for flag in [
+            "--refine-intrinsics",
+            "--remove-plane",
+            "--auto-crop",
+            "--isolate-object",
+        ] {
+            assert!(!has(&args, flag), "unexpected default-off {flag}");
+        }
+
+        // Flip them on.
+        c.refine_intrinsics = true;
+        c.remove_plane = true;
+        c.auto_crop = true;
+        let args = build_args(&c);
+        for flag in ["--refine-intrinsics", "--remove-plane", "--auto-crop"] {
+            assert!(has(&args, flag), "missing enabled {flag}");
+        }
+
+        // Scale tag is only forwarded when set.
+        assert!(!has(&args, "--scale-tag"));
+        c.scale_tag_m = 0.1;
+        let args = build_args(&c);
+        assert_eq!(value_of(&args, "--scale-tag"), Some("0.1"));
+
+        // Isolation forwards its three knobs with the values.
+        c.isolate_object = true;
+        c.object_support = 4;
+        c.object_centrality = 0.7;
+        c.object_central_radius = 0.4;
+        let args = build_args(&c);
+        for flag in [
+            "--isolate-object",
+            "--object-support",
+            "--object-centrality",
+            "--object-central-radius",
+        ] {
+            assert!(has(&args, flag), "missing {flag}");
+        }
+        assert_eq!(value_of(&args, "--object-support"), Some("4"));
+        assert_eq!(value_of(&args, "--object-centrality"), Some("0.7"));
+    }
+
+    /// The default config must round-trip through JSON (what the UI sends).
+    #[test]
+    fn config_json_round_trips() {
+        let c = Config::default();
+        let json = serde_json::to_string(&c).unwrap();
+        let back: Config = serde_json::from_str(&json).unwrap();
+        let a = build_args(&c);
+        let b = build_args(&back);
+        assert_eq!(a, b);
+    }
+}

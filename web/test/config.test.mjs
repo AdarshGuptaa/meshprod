@@ -88,4 +88,20 @@ for (const style of ["colour", "clay", "normals", "height", "wireframe", "xray"]
 assert.equal((html.match(/data-style=/g) || []).length, 6, "expected exactly one style row");
 fill("six view styles in one row", ++n);
 
+// 8) Buttons map to real actions / presets / view styles.
+const actionBlock = block("const QUICK_ACTIONS", 'document.querySelectorAll("[data-action]")');
+const { QUICK_ACTIONS } = new Function(`${actionBlock}; return { QUICK_ACTIONS };`)();
+for (const [name] of Object.entries(QUICK_ACTIONS)) {
+  assert(html.includes(`data-action="${name}"`), `no button for action "${name}"`);
+}
+for (const [, key] of actionBlock.matchAll(/config\.([a-z_]+)/g)) {
+  assert(key in DEFAULT_CONFIG, `action writes unknown config key "${key}"`);
+}
+const dataActions = [...html.matchAll(/data-action="([a-z]+)"/g)].map((m) => m[1]);
+for (const a of dataActions) assert(a in QUICK_ACTIONS, `button action "${a}" has no handler`);
+const dataPresets = [...html.matchAll(/data-preset="([a-z]+)"/g)].map((m) => m[1]);
+for (const p of dataPresets) assert(p in PRESETS, `button preset "${p}" is not defined`);
+assert.equal(dataPresets.length, 4, "expected four quality presets");
+fill("buttons map to actions/presets", ++n);
+
 console.log(`\nUI config tests passed (${n}).`);

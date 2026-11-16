@@ -1,0 +1,10 @@
+{
+  "code": "calibration-failed",
+  "hints": [
+    "Print a Tag36h11 tag and pass its edge length in metres (--estimate-focal 0.1).",
+    "Keep the tag flat, in focus and filling a good part of the frame.",
+    "Avoid fronto-parallel views: tilt the tag so the homography constrains the focal."
+  ],
+  "message": "camera calibration failed: no Tag36h11 tag found in 43 sampled frames",
+  "stage": 1
+}
