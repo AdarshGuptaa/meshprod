@@ -19,6 +19,7 @@ const DEFAULT_CONFIG = {
   hole_fill_iterations: 0, smooth_iterations: 8, bilateral_iterations: 2,
   needle_aspect: 0.0, target_faces: 100000, min_component_faces: 200,
   scale_tag_m: 0, isolate_object: false,
+  object_support: 3, object_centrality: 0.6, object_central_radius: 0.35,
 };
 
 const SCHEMA = [
@@ -96,6 +97,12 @@ const SCHEMA = [
         help: "RANSAC-removes the dominant plane (table, floor) from the dense cloud before fusion." },
       { key: "isolate_object", label: "Isolate object", type: "toggle",
         help: "Keeps the orbit-centered object (seen in the middle of most frames) and drops the background before fusion, so the TSDF volume is tight and the mesh is continuous." },
+      { key: "object_central_radius", label: "Central disk", type: "range", min: 0.1, max: 0.8, step: 0.05,
+        help: "Radius of the image region that counts as 'central', as a fraction of the half-diagonal. Larger keeps more of the frame (more background); smaller is stricter. Used when Isolate object is on." },
+      { key: "object_centrality", label: "Centrality", type: "range", min: 0.3, max: 1, step: 0.05,
+        help: "Fraction of a point's sightings that must land in the central disk. Higher keeps only points the camera keeps centred (the object). Used when Isolate object is on." },
+      { key: "object_support", label: "Min views", type: "range", min: 1, max: 12, step: 1,
+        help: "Minimum registered views that must observe an object point. Higher is stricter. Used when Isolate object is on." },
     ],
   },
   {

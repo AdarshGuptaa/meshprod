@@ -62,6 +62,12 @@ pub struct Config {
     pub scale_tag_m: f64,
     /// Isolate the orbit-centered object from the background before fusion.
     pub isolate_object: bool,
+    /// Min registered views observing an object point (with isolate_object).
+    pub object_support: usize,
+    /// Min fraction of central sightings for an object point (with isolate_object).
+    pub object_centrality: f64,
+    /// Central-disk radius as a fraction of the image half-diagonal.
+    pub object_central_radius: f64,
 }
 
 impl Default for Config {
@@ -103,6 +109,9 @@ impl Default for Config {
             min_component_faces: 200,
             scale_tag_m: 0.0,
             isolate_object: false,
+            object_support: 3,
+            object_centrality: 0.6,
+            object_central_radius: 0.35,
         }
     }
 }
@@ -693,6 +702,12 @@ fn build_args(c: &Config) -> Vec<String> {
     }
     if c.isolate_object {
         a.push("--isolate-object".to_string());
+        a.push("--object-support".to_string());
+        a.push(c.object_support.to_string());
+        a.push("--object-centrality".to_string());
+        a.push(c.object_centrality.to_string());
+        a.push("--object-central-radius".to_string());
+        a.push(c.object_central_radius.to_string());
     }
     for (on, flag) in [
         (c.geo_verify, "--geo-verify"),
