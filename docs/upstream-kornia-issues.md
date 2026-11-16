@@ -139,3 +139,7 @@ have it), the proposed change, and an acceptance bar.
   Wiring it into `meshprod`'s calibration step is a `meshprod` task.
 - **Determinism** is already handled upstream (seeded PnP, `BTreeMap` track
   ordering, sorted point order). No upstream change needed.
+- **Foreground isolation** (`--isolate-object`: central-view saliency, largest
+  component, adaptive TSDF resolution) is entirely meshprod-side. kornia has no
+  foreground stage, so there is nothing to upstream here; it exists to work
+  around the symptom of UP-1 (drift) and whole-scene fusion.
