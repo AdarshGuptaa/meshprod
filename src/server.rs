@@ -725,8 +725,17 @@ async fn mesh(
     };
     let bytes = std::fs::read(&path)
         .map_err(|_| (StatusCode::NOT_FOUND, format!("missing {}", path.display())))?;
+    // Send the filename so a direct navigation saves `....ply`, not extensionless.
+    let filename = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "mesh.ply".to_string());
     Ok(Response::builder()
         .header("content-type", "application/octet-stream")
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{filename}\""),
+        )
         .body(axum::body::Body::from(bytes))
         .unwrap())
 }

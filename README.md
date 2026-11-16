@@ -117,6 +117,12 @@ python3 -m venv ~/Dev/tools/venv-o3d
 The object is a polished Swiss knife; its specular blade is the main reason the
 mesh is open and split into patches. See the TAI report for the failure modes.
 
+Why it beats the other clips: mesh quality is set by **pixels on the object,
+texture, and parallax**. The knife scores on all three (1280×720, textured,
+real orbit); `lip_balm` is white-on-white, `remote` is dark with a short
+parallax window, and `tube` yields ~27 keypoints/frame. Full comparison in
+[`docs/PROCESS.md`](docs/PROCESS.md) §5.11.
+
 ### Accuracy pass (measured on the three captures)
 
 | Capture | Depth median / p90 | Patches | Euler |

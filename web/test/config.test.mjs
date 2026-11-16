@@ -115,4 +115,10 @@ assert(html.includes('id="eta-value"') && html.includes('id="plan-meta"'), "miss
 assert(app.includes("estimateEtaSeconds") && app.includes("updatePlanWidget"), "missing ETA model");
 fill("ETA + preview widget wired", ++n);
 
+// 11) Exports carry real extensions.
+assert(html.includes('download="mesh.ply"'), "PLY link must name a .ply file");
+assert(app.includes("meshprod-config.json"), "config export must download a .json file");
+assert(app.includes("renderRunLinks") && app.includes("_${kind}.ply"), "artifact PLY links not wired");
+fill("exports have real filenames", ++n);
+
 console.log(`\nUI config tests passed (${n}).`);

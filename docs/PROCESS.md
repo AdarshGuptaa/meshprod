@@ -378,6 +378,41 @@ or upstream loop closure, not more tuning.
 
 ---
 
+### 5.11 Why one capture wins (the `swiss_knife` case)
+
+Mesh quality is decided before any code runs, by three levers: **pixels on the
+object**, **texture**, and **parallax**. `swiss_knife` is the only reference clip
+that scores on all three, which is why it is the golden example.
+
+| Lever | `swiss_knife` | the other clips |
+|---|---|---|
+| Pixels on the object | 1280×720, object large in frame | 480×854 portrait (`lip_balm`, `keyboard`, `stand`) or 854×480 (`remote`, `tube`) — a third or less of the pixels |
+| Texture | markings, multi-tool body, red scales, a keyboard in frame | `tube` ~27 keypoints/frame; `lip_balm` white-on-white; `remote` dark plastic on plain red |
+| Parallax | real orbit, RMSE ~2.09 px, depth ~4 % | `remote` only 16–27 s has parallax (p90 56 %); `tube` 2/91 views |
+
+Measured comparison:
+
+| Clip | Resolution | Registration | Depth | Isolation result |
+|---|---|---|---|---|
+| **swiss_knife** | 1280×720 | ~19–22/63 | ~4 % | **1 patch, Euler −64** |
+| keyboard | 480×854 | 63 views | 4.5 % | works (low res) |
+| stand | 480×854 | 140/380 | 2.0 % | 20 patches (thin object) |
+| lip_balm | 480×854 | 66 views | 14.8 % | 41 patches (white-on-white) |
+| remote | 854×480 | 20/151 | 4.2 % med / 56 % p90 | near-empty / fails (dark, short parallax) |
+| tube | 854×480 | 2/91 | — | fails (textureless) |
+
+Isolation also favours the knife: it is compact, centred and seen from many
+views, so the centrality mask and the object box are clean, and the adaptive
+TSDF resolution lands in a sane range. On `remote` too few central points
+survive, so it correctly declines; on `tube` bootstrap fails first.
+
+The one weakness of the knife is the **polished blade** (specular depth holes),
+which is why even the un-isolated golden run is open (~33 patches); the diffuse,
+textured handle is what carries it.
+
+**The lesson is capture-side:** fill the frame, add diffuse light and physical
+texture, and keep real camera translation. No preset recovers a missing lever.
+
 ## 6. Current limitations
 
 - **Scale drift** on long orbits without loop closure (UP-1) can make a

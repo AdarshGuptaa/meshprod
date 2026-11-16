@@ -633,7 +633,41 @@ function applyStatus(data) {
     }
     const link = document.getElementById("download-mesh");
     link.href = "/api/mesh/mesh";
+    link.download = `${artifactStem(data.video)}.ply`;
     link.style.display = "inline-flex";
+  }
+  if (data.status === "done") renderRunLinks(data.kinds, data.video);
+}
+
+const ARTIFACTS = {
+  mesh: "Mesh",
+  sparse: "Sparse",
+  cloud: "Cloud",
+  oriented: "Oriented",
+};
+
+function artifactStem(video) {
+  return (video || "mesh")
+    .replace(/\.[^.]+$/, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "mesh";
+}
+
+/// One download link per produced PLY, each with a real `.ply` filename.
+function renderRunLinks(kinds, video) {
+  const host = document.getElementById("run-links");
+  if (!host) return;
+  const list = (kinds || []).filter((k) => ARTIFACTS[k]);
+  if (!list.length) return;
+  const stem = artifactStem(video);
+  host.innerHTML = "";
+  for (const kind of list) {
+    const a = document.createElement("a");
+    a.className = "ghost";
+    a.href = `/api/mesh/${kind}`;
+    a.download = kind === "mesh" ? `${stem}.ply` : `${stem}_${kind}.ply`;
+    a.innerHTML = `<svg class="icon"><use href="#i-download"/></svg>${ARTIFACTS[kind]} PLY`;
+    host.appendChild(a);
   }
 }
 
@@ -843,7 +877,18 @@ function renderAltai() {
 }
 
 document.getElementById("export-config").addEventListener("click", () => {
-  document.getElementById("config-json").textContent = JSON.stringify(config, null, 2);
+  const text = JSON.stringify(config, null, 2);
+  document.getElementById("config-json").textContent = text;
+  // Actually download it as a .json file (the preview is just a convenience).
+  const blob = new Blob([text], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "meshprod-config.json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 });
 
 /* ---------- slides ---------- */
