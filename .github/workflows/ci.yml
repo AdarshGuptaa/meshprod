@@ -32,17 +32,25 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Since 1.28 the Windows MSVC package is a single Inno Setup .exe
-          # (runtime + development in one), and old releases are pruned from the
-          # server, so pin a current stable release and install the devel type.
+          # GStreamer 1.28+ ships the MSVC build as a single Inno Setup .exe
+          # (runtime + development), and older releases are pruned from the
+          # server, so pin a current stable release and install the devel type
+          # into a writable, fixed location.
           $v = "1.28.9"
-          $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$v/msvc"
+          $gst = "D:\gstreamer\1.0\msvc_x86_64"
+          $url = "https://gstreamer.freedesktop.org/data/pkg/windows/$v/msvc/gstreamer-1.0-msvc-x86_64-$v.exe"
           $exe = "$env:RUNNER_TEMP\gstreamer-$v.exe"
-          Invoke-WebRequest "$base/gstreamer-1.0-msvc-x86_64-$v.exe" -OutFile $exe
-          & $exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /TYPE=devel "/DIR=C:\gstreamer\1.0\msvc_x86_64"
-          "GSTREAMER_1_0_ROOT_MSVC_X86_64=C:\gstreamer\1.0\msvc_x86_64" >> $env:GITHUB_ENV
-          "PKG_CONFIG_PATH=C:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" >> $env:GITHUB_ENV
-          "C:\gstreamer\1.0\msvc_x86_64\bin" >> $env:GITHUB_PATH
+          Invoke-WebRequest $url -OutFile $exe
+          Start-Process -FilePath $exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/TYPE=devel',"/DIR=$gst" -Wait -NoNewWindow
+          if (-not (Test-Path "$gst\lib\pkgconfig\gstreamer-1.0.pc")) {
+            throw "GStreamer devel install missing at $gst"
+          }
+          # gstreamer-rs's -sys build resolves libs through pkg-config; install
+          # a standalone pkg-config-lite so the lookup works on the runner.
+          choco install pkgconfiglite -y --no-progress --limit-output
+          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$gst" >> $env:GITHUB_ENV
+          "PKG_CONFIG_PATH=$gst\lib\pkgconfig" >> $env:GITHUB_ENV
+          "$gst\bin" >> $env:GITHUB_PATH
 
       - name: fmt
         run: cargo fmt --all -- --check
