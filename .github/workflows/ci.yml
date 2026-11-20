@@ -32,13 +32,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $v = "1.24.2"
+          # Since 1.28 the Windows MSVC package is a single Inno Setup .exe
+          # (runtime + development in one), and old releases are pruned from the
+          # server, so pin a current stable release and install the devel type.
+          $v = "1.28.9"
           $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$v/msvc"
-          foreach ($pkg in @("devel","runtime")) {
-            $msi = "$env:RUNNER_TEMP\gst-$pkg.msi"
-            Invoke-WebRequest "$base/gstreamer-1.0-$pkg-msvc-x86_64-$v.msi" -OutFile $msi
-            Start-Process msiexec.exe -ArgumentList "/i","`"$msi`"","/quiet","/norestart" -Wait
-          }
+          $exe = "$env:RUNNER_TEMP\gstreamer-$v.exe"
+          Invoke-WebRequest "$base/gstreamer-1.0-msvc-x86_64-$v.exe" -OutFile $exe
+          & $exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /TYPE=devel "/DIR=C:\gstreamer\1.0\msvc_x86_64"
           "GSTREAMER_1_0_ROOT_MSVC_X86_64=C:\gstreamer\1.0\msvc_x86_64" >> $env:GITHUB_ENV
           "PKG_CONFIG_PATH=C:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" >> $env:GITHUB_ENV
           "C:\gstreamer\1.0\msvc_x86_64\bin" >> $env:GITHUB_PATH
