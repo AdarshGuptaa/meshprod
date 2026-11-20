@@ -1,0 +1,482 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{microtype}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{float}
+
+\definecolor{accent}{HTML}{8a6d1f}
+\titleformat{\section}{\Large\bfseries\color{accent}}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.6em}{}
+
+\newcommand{\pct}{\,\%}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{\bfseries meshprod: Monocular Video to Measured Mesh\\[0.3em]
+\large A Technical Report on the Sparse SfM--Dense MVS--Fusion Pipeline}
+\author{Adarsh Gupta\\Indian Institute of Information Technology, Gwalior (IIIT Gwalior)}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\noindent
+This report documents \code{meshprod}, a self-contained pipeline that turns a single
+hand-held video of an object into a measured triangle mesh, with a machine-readable
+assessment of how trustworthy the result is. The system chains nine classical
+computer-vision stages---decode, feature extraction, matching, track building, incremental
+structure-from-motion, dense multi-view stereo, TSDF fusion, marching-tetrahedra meshing and
+simplification---on top of the \code{kornia-rs} library, and reports every number it emits.
+We describe each stage with the mathematics and the research it derives from, present the
+measured results on a set of reference captures, and catalogue the engineering iterations
+that fixed concrete failures (an intrinsic-orientation bug, a floating-point cache
+round-trip error, a fragile scale anchor, and a whole-scene fusion problem). The pipeline
+contains no learned model; its correctness rests on measured reprojection and depth errors,
+and on deterministic, reproducible behaviour.
+\end{abstract}
+
+\tableofcontents
+
+\section{Introduction}
+\label{sec:intro}
+
+\code{meshprod} reconstructs a \emph{single object} filmed by a hand-held or orbiting camera,
+producing a triangle mesh plus a machine-readable report that states how reliable the result
+is. Two properties are non-negotiable:
+
+\begin{itemize}[leftmargin=1.5em]
+\item \textbf{Correctness over decoration.} Every number in the report is measured
+(reprojection error, depth-vs-sparse disagreement, mesh topology); nothing is asserted
+without a check behind it.
+\item \textbf{Honest failure.} When the input cannot support a mesh, the pipeline stops with a
+named error and actionable hints rather than emitting a confident blob.
+\end{itemize}
+
+The project is a thin application crate (\code{sfm2mesh}) built on the \code{kornia-rs}
+Rust computer-vision stack, pinned to the \code{semproj/sfm2mesh} branch. The application owns
+the orchestration, the dense/TSDF/mesh stages and a local web UI; \code{kornia-rs} provides
+features, matching primitives, multi-view geometry, PnP, bundle adjustment and incremental SfM.
+
+\section{System architecture}
+\label{sec:arch}
+
+\begin{center}\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Layer} & \textbf{Crate} & \textbf{Role}\\
+\midrule
+Geometry / SfM & \code{kornia-calib}, \code{kornia-3d} & tracks, PnP, BA, triangulation, pose-graph\\
+Features / images & \code{kornia-imgproc}, \code{kornia-image} & SIFT/ORB, colour conversion\\
+I/O & \code{kornia-io} & GStreamer decode, JPEG/PNG\\
+Application & \code{sfm2mesh} & orchestration, dense, TSDF, mesh, UI\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The data flow is:
+
+\begin{center}\small
+\texttt{video}\ $\to$\ \texttt{decode}\ $\to$\ \texttt{features}\ $\to$\ \texttt{match}\ $\to$\ \texttt{tracks}\ $\to$\ \texttt{sparse SfM}\ $\to$\ [\texttt{scale}]\ $\to$\ \texttt{isolation}\\[0.25em]
+$\to$\ \texttt{dense depth}\ $\to$\ \texttt{TSDF}\ $\to$\ \texttt{mesh}\ $\to$\ \texttt{report}
+\end{center}
+
+A local web server (\code{--serve}) runs the CLI as a child process, parses its progress and
+metric lines, and serves a browser front-end plus the PLY artifacts.
+
+\section{The pipeline}
+\label{sec:pipeline}
+
+\subsection{Decode}
+\label{sec:decode}
+
+The video is read through GStreamer into RGB frames, each converted to grayscale for feature
+detection. Only every $N$-th frame is kept (\code{--frame-step}): consecutive 30\,fps frames
+move too little to triangulate stably, so a step of $5$--$20$ sets a healthy baseline while
+cutting decode and matching cost. Frames are cached because decode is the single most
+expensive fixed cost. The \emph{intrinsics} must match the decoded frame, not the sensor: a
+portrait clip decoded unrotated has its principal point swapped relative to a landscape one,
+and $f_x \approx 0.7\times\max(w,h)$ is a good phone guess.
+
+\subsection{Feature extraction}
+\label{sec:features}
+
+SIFT \cite{lowe2004} is the default: scale- and rotation-invariant, robust to moderate
+viewpoint change, and sub-pixel localised. ORB \cite{rublee2011} is available as a faster,
+weaker alternative. A capture with fewer than $\sim$80 keypoints per frame is almost always
+blurry, defocused or textureless; the pipeline warns, because no downstream stage can recover
+structure that was never detected.
+
+\subsection{Matching}
+\label{sec:matching}
+
+Each frame is compared to the next $W$ frames (\code{--match-window}) using \emph{mutual
+nearest neighbours} plus \emph{Lowe's ratio test} ($d_1 < r\,d_2$) \cite{lowe2004}. Optional
+\emph{epipolar verification} fits a fundamental matrix per pair with RANSAC
+\cite{fischler1981} and keeps geometrically consistent inliers; the seven-point estimator
+needs at least seven points, and a pair with fewer than \code{--geo-min-inliers} inliers is
+dropped \cite{hartley2004}. \emph{Wide-baseline} matching additionally links frame $i$ to
+$i+K, i+2K, \ldots$ to bridge fast motion.
+
+\subsection{Tracks}
+\label{sec:tracks}
+
+Matches are chained into multi-view tracks with a union--find over $(camera, keypoint)$ nodes
+\cite{schonberger2016}. Two cases are handled explicitly: \emph{orientation siblings} (SIFT can
+emit two keypoints at the same pixel, which are merged) and \emph{genuine ambiguity} (two
+distinct image locations from one camera in one component, which drops the track). Track order
+is made deterministic because floating-point summation in bundle adjustment depends on
+observation order.
+
+\subsection{Sparse structure-from-motion}
+\label{sec:sfm}
+
+\code{kornia\_calib::reconstruct} implements incremental SfM in the COLMAP tradition
+\cite{schonberger2016}:
+
+\begin{enumerate}[leftmargin=1.5em]
+\item \textbf{Bootstrap} --- pick a seed pair by geometry (shared tracks, median triangulation
+angle, homography-vs-fundamental ratio) and initialise a two-view essential solve
+\cite{hartley2004}.
+\item \textbf{Grow} --- register the unplaced camera with the most 2D--3D links via PnP-RANSAC;
+EPnP \cite{lepetit2009} gives the pose, RANSAC rejects outliers, and SPRT \cite{wald1945}
+streams residuals to reject hopeless hypotheses early. A view is accepted only with at least
+\code{--min-registration-inliers} inliers.
+\item \textbf{Triangulate} --- new tracks are triangulated with parallax, cheirality and
+reprojection gates.
+\item \textbf{Bundle adjustment} --- minimise reprojection error over poses and points with
+Levenberg--Marquardt and a robust (Huber/Cauchy) loss via IRLS
+\cite{triggs2000,lourakis2009}. The reduced camera system is factorised sparsely, which scales
+linearly rather than cubically in the camera count.
+\item \textbf{Maintenance} --- periodic global BA, reprojection filtering, re-admission of
+previously rejected sightings (\emph{CompleteTracks}), and local windowed BA after each
+registration keep long chains from drifting.
+\end{enumerate}
+
+The solve is \emph{up to scale} until something provides a metric reference.
+
+\subsection{Calibration and metric scale}
+\label{sec:scale}
+
+Two distinct problems are conflated in the field and kept separate here:
+
+\begin{itemize}[leftmargin=1.5em]
+\item \textbf{Focal length} (intrinsics), estimated from a planar AprilTag \cite{olson2011}
+via Zhang's orthonormality constraint \cite{zhang2000}: \code{estimate\_focal} recovers $f$
+from the board-to-image homography, taking the median over sampled frames and reporting the
+robust (MAD) spread. Single-view estimation cannot separate the principal point or distortion;
+multi-view Zhang (\code{calibrate\_multishot}) is available for that.
+\item \textbf{Metric scale} (extrinsics gauge). A tag of known edge length \emph{in the scene}
+turns a shape into a measured shape. Because kornia's built-in \code{tag\_scale} triangulates
+the tag from a single widest-baseline pair (fragile on an orbit), the application instead
+triangulates each corner by \emph{N-view DLT} over every registered view that saw the tag and
+takes the median edge. A scene extent that is implausible for the tag size is flagged.
+\end{itemize}
+
+\subsection{Foreground isolation}
+\label{sec:isolation}
+
+A ``scattered'' mesh is usually the whole room, not the object. The capture centres the object,
+so the application scores every sparse point by the fraction of its observations in which it
+projects inside a central disk of the image. Well-supported \emph{and} central points are kept,
+the largest 26-connected component is taken, and an implausibly tiny cluster is rejected. The
+mask trims the sparse cloud and gives the dense stage a tight box. Crucially, the TSDF
+resolution is rescaled to the object box so the voxel size stays at the full-scene scale: a
+tight box at the configured resolution over-resolves the depth noise and shatters the surface
+(measured: 845 patches at $0.0004$\,units/voxel vs.\ 1 patch at $0.0032$).
+
+\subsection{Dense depth}
+\label{sec:dense}
+
+Each registered view gets a depth map by \emph{plane sweeping} \cite{collins1996}: sample
+inverse-depth hypotheses and score each by photometric consistency with neighbours. Costs
+available: NCC (normalised cross-correlation), Census \cite{zabih1994} (intensity orderings),
+and SGM \cite{hirschmuller2008} (Census plus a smoothness prior along 4 or 8 paths). SGM is the
+default on low/medium-texture captures (measured: Census WTA produced 30 patches on the
+keyboard clip, SGM produced 2). Winners are refined to sub-pixel by fitting a parabola, a
+pixel is kept only if \code{--lr-required} neighbours agree, and a speckle filter removes
+isolated pixels.
+
+\subsection{TSDF fusion}
+\label{sec:tsdf}
+
+Depth maps are fused into a truncated signed distance field \cite{curless1996,newcombe2011}.
+Each voxel accumulates confidence-weighted ``in front/behind'' votes; the volume is bounded by
+the robust (1st--99th percentile) extent of the dense cloud, and the truncation band is
+\code{--trunc-voxels} voxels wide. The truncation must exceed the depth noise or views disagree
+and tear the surface.
+
+\subsection{Meshing, smoothing, simplification}
+\label{sec:mesh}
+
+The zero level set is extracted with \emph{marching tetrahedra} (a variant of marching cubes
+\cite{lorensen1987}). Small patches are dropped, the surface is smoothed with Taubin $\lambda/\mu$
+passes \cite{taubin1995} and a bilateral pass that preserves creases, and finally simplified to
+a face budget with quadric error metrics \cite{garland1997}. Colours and normals are assigned
+per vertex by projecting into the source frames; normals come from the TSDF gradient.
+
+\subsection{Report and named failures}
+\label{sec:report}
+
+Every run writes \code{<stem>\_report.json}: elapsed time, statistics (views, points,
+reprojection RMSE, depth error percentiles, face counts), a mesh-quality pack (patches, Euler
+characteristic, boundary-edge ratio, degenerate/needle fractions, closedness), provenance
+(video SHA-256, exact argv, version), resources (peak RSS), and a heuristic \emph{self-assessment}
+confidence. Failures write \code{<stem>\_error.json} with a stable machine code and hints.
+
+\section{Results}
+\label{sec:results}
+
+All numbers were measured on one machine. Intrinsics were derived from the decoded frame
+($f_x \approx 0.7 \times \max(w,h)$, principal point at the image centre).
+
+\subsection{Baseline}
+\label{sec:baseline}
+
+On \code{swiss\_knife.mp4} (628 frames, $1280\times720$ HEVC, handheld orbit):
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Metric} & \textbf{Value}\\
+\midrule
+Registered views & 22 / 63\\
+Sparse points / RMSE & 1{,}175 / 2.086\,px\\
+Dense depth vs sparse & median 4.8\pct, p90 44.8\pct (13{,}659 samples)\\
+Raw mesh & 109{,}933 faces, 525 patches\\
+Final mesh & 20{,}000 faces, 36 patches\\
+Mesh topology & open (partial scan), Euler $=-102$\\
+Wall time & $\approx$55\,s (decode 23.5\,s, dense $\approx$25\,s)\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Accuracy pass}
+\label{sec:accuracy}
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Capture} & \textbf{Depth median / p90} & \textbf{Patches} & \textbf{Euler}\\
+\midrule
+\code{swiss\_knife} (specular) & 4.8$\to$\textbf{4.0}\pct / 44.8$\to$\textbf{29.4}\pct & 34$\to$33 & $-104\to-97$\\
+\code{lip\_balm} 18--27\,s (white) & 19.0$\to$\textbf{14.8}\pct / 77$\to$79\pct & 41 & $-196$\\
+\code{keyboard} 15--25\,s (textured) & 6.8$\to$\textbf{4.5}\pct / 55.3$\to$52.8\pct & 2$\to$4 & $-36\to-9$\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The improvements came from parabolic sub-pixel depth refinement, 8-path SGM, a depth speckle
+filter, and feature-preserving bilateral mesh smoothing.
+
+\subsection{Presets}
+\label{sec:presets}
+
+The four Studio presets are complete configs (they replace, not merge); \code{fast},
+\code{balanced} and \code{quality} pin explicit dense parameters, while \code{auto} derives them
+from the measured frame texture.
+
+\begin{center}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Preset} & \textbf{step} & \textbf{scale} & \textbf{planes} & \textbf{voxel} & \textbf{faces}\\
+\midrule
+fast & 20 & 0.35 & 64 & 192 & 20{,}000\\
+balanced & 10 & 0.50 & 96 & 256 & 100{,}000\\
+quality & 5 & 0.75 & 128 & 320 & 80{,}000\\
+auto & 10 & 0.50 & 96 & 256 & 100{,}000\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Measured on \code{swiss\_knife.mp4}:
+
+\begin{center}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Preset} & \textbf{Registered} & \textbf{RMSE} & \textbf{Depth} & \textbf{Time}\\
+\midrule
+fast & 8/32 & 1.58\,px & 2.0\pct & 32\,s\\
+balanced & 19/63 & 2.09\,px & 3.9\pct & 77\,s\\
+quality & 40/126 & 2.44\,px & 3.3\pct & 340\,s\\
+auto & 19/63 & 2.09\,px & 3.9\pct & 76\,s\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Reference captures}
+\label{sec:captures}
+
+\begin{center}
+\begin{tabular}{lcccl}
+\toprule
+\textbf{Clip} & \textbf{Resolution} & \textbf{Views} & \textbf{Depth} & \textbf{Result}\\
+\midrule
+\code{swiss\_knife} & $1280\times720$ & $\sim$22/63 & 4.0\pct & 33 patches\\
+\code{keyboard} & $480\times854$ & 63 & 4.5\pct & 4 patches\\
+\code{stand} & $480\times854$ & 140/380 & 2.0\pct & 20 patches\\
+\code{lip\_balm} & $480\times854$ & 66 & 14.8\pct & 41 patches\\
+\code{remote} & $854\times480$ & 20/151 & 4.2\pct med / 56\pct p90 & near-empty\\
+\code{tube} & $854\times480$ & 2/91 & --- & fails (27 kp/frame)\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Foreground isolation}
+\label{sec:iso-res}
+
+With \code{--isolate-object} on \code{swiss\_knife.mp4} (identical views and RMSE), the mesh went
+from \textbf{49 patches / Euler $-345$} to \textbf{1 patch / Euler $-64$}, by cropping the dense
+cloud to the object box and rescaling the TSDF resolution.
+
+\subsection{Determinism and caching}
+\label{sec:det}
+
+Fresh runs, cache hits and cache misses are byte-identical. The sparse-stage cache (decoded
+frames + tracks, keyed by video SHA-256 and stage parameters) reduced an 11\,s clip's sparse
+stage from 42.7\,s to 13.2\,s.
+
+\section{Trust and measurement}
+\label{sec:trust}
+
+No single number proves a mesh is good, so the report triangulates several: sparse reprojection
+RMSE (camera/point solve), depth-vs-sparse error (a low median with a high p90 means good
+typical depth and a bad outlier tail), mesh topology (patch count, Euler characteristic,
+boundary ratio), and a self-assessment confidence. The self-assessment is a consistency signal,
+not a guarantee: it has been observed to report ``high'' on a run whose mesh covered almost no
+surface, which is why coverage and continuity are treated separately.
+
+Thirteen named failure codes (e.g.\ \code{low-registration}, \code{empty-mesh},
+\code{calibration-failed}) carry actionable hints, so the UI shows a specific message rather than
+a stack trace.
+
+\section{Iteration history}
+\label{sec:history}
+
+Each entry is a real failure with symptom, root cause, fix and measured before/after.
+
+\begin{enumerate}[leftmargin=1.5em]
+\item \textbf{Blobs and holes.} Winner-take-all NCC had no spatial smoothness and depth was
+quantised. Fixed with sub-pixel refinement, 8-path SGM, a speckle filter and bilateral
+smoothing (depth median $4.8\to4.0\pct$).
+\item \textbf{``Not enough views'' on landscape clips.} New clips were $854\times480$ landscape
+but the intrinsics were from $480\times854$ portrait, so $c_x,c_y$ were swapped. Registration
+went from 12/151 to 24/150, and 84/84 on the trimmed segment.
+\item \textbf{Low keypoint density.} Blurry or textureless captures yield $\sim$30 keypoints per
+frame; the tool warns below 80. The tube clip measured 27 keypoints/frame $\to$ 2/91 views.
+\item \textbf{Non-deterministic cache.} \code{serde\_json} round-trips f32-promoted f64
+coordinates one ULP off, and the frame cache stored gray/RGB in blocks but read them
+interleaved. Fixed by storing raw f64 bits and matching the block layout; reruns are now
+byte-identical.
+\item \textbf{Preset drift.} Presets were partial overrides (and \code{balanced} was empty), so
+they inherited the previous mode. Fixed by making presets complete configs that replace the
+current one.
+\item \textbf{Fragile metric scale.} kornia's \code{tag\_scale} triangulates from one
+widest-baseline pair; on an orbit the tag anchored a 10\,cm tag to a $\sim$20--66\,m mesh. The
+application now uses N-view DLT with a plausibility warning, and the root cause (gauge drift
+without loop closure) is filed upstream as \cite{loopclosure}.
+\item \textbf{Self-assessment over-claim.} A run reported 0.77 confidence for a 768-face mesh;
+the gap is documented and coverage is treated separately.
+\item \textbf{Whole-scene fusion.} Fusing the whole room shatters the object; foreground
+isolation + adaptive resolution fixed it (49$\to$1 patch).
+\end{enumerate}
+
+\section{Limitations and future work}
+\label{sec:future}
+
+\begin{itemize}[leftmargin=1.5em]
+\item \textbf{Scale drift} on long orbits without loop closure can make a ``metric'' map wrong
+even when a tag anchors it; a plausibility warning is the current guard, and the fix (pose-graph
+loop closure) is proposed upstream \cite{loopclosure}.
+\item \textbf{Foreground isolation} is heuristic and centred-object specific; it declines on
+clips with too few central points rather than guessing.
+\item \textbf{Non-watertight meshes.} Marching tetrahedra does not guarantee a closed surface;
+screened Poisson \cite{kazhdan2013} is the planned route to watertightness.
+\item \textbf{Textureless / specular / dark} surfaces remain the dominant failure mode.
+\end{itemize}
+
+Further upstream improvements (track merging, feature-path covariance, optimal triangulation,
+adaptive thresholds) are tracked in the repository's \code{docs/upstream-kornia-issues.md}.
+
+\begin{thebibliography}{99}
+
+\bibitem{lowe2004} D.~G. Lowe. Distinctive image features from scale-invariant keypoints.
+\emph{International Journal of Computer Vision}, 2004.
+
+\bibitem{rublee2011} E.~Rublee, V.~Rabaud, K.~Konolige, G.~Bradski. ORB: an efficient
+alternative to SIFT or SURF. \emph{ICCV}, 2011.
+
+\bibitem{hartley2004} R.~Hartley, A.~Zisserman. \emph{Multiple View Geometry in Computer
+Vision}. Cambridge University Press, 2004.
+
+\bibitem{fischler1981} M.~A. Fischler, R.~C. Bolles. Random sample consensus: a paradigm for
+model fitting. \emph{Communications of the ACM}, 1981.
+
+\bibitem{lepetit2009} V.~Lepetit, F.~Moreno-Noguer, P.~Fua. EPnP: an accurate $O(n)$ solution
+to the PnP problem. \emph{International Journal of Computer Vision}, 2009.
+
+\bibitem{wald1945} A.~Wald. Sequential tests of statistical hypotheses. \emph{Annals of
+Mathematical Statistics}, 1945.
+
+\bibitem{triggs2000} B.~Triggs, P.~McLauchlan, R.~Hartley, A.~Fitzgibbon. Bundle adjustment ---
+a modern synthesis. \emph{Vision Algorithms: Theory and Practice}, 2000.
+
+\bibitem{lourakis2009} M.~Lourakis, A.~Argyros. SBA: a software package for generic sparse
+bundle adjustment. \emph{ACM Transactions on Mathematical Software}, 2009.
+
+\bibitem{zhang2000} Z.~Zhang. A flexible new technique for camera calibration. \emph{IEEE
+Transactions on Pattern Analysis and Machine Intelligence}, 2000.
+
+\bibitem{olson2011} E.~Olson. AprilTag: a robust and flexible visual fiducial system.
+\emph{ICRA}, 2011.
+
+\bibitem{schonberger2016} J.~L. Sch\"onberger, J.-M. Frahm. Structure-from-motion revisited.
+\emph{CVPR}, 2016.
+
+\bibitem{collins1996} R.~T. Collins. A space-sweep approach to true multi-image matching.
+\emph{CVPR}, 1996.
+
+\bibitem{zabih1994} R.~Zabih, J.~Woodfill. Non-parametric local transforms for computing visual
+correspondence. \emph{ECCV}, 1994.
+
+\bibitem{hirschmuller2008} H.~Hirschm\"uller. Stereo processing by semi-global matching and
+mutual information. \emph{IEEE Transactions on Pattern Analysis and Machine Intelligence}, 2008.
+
+\bibitem{curless1996} B.~Curless, M.~Levoy. A volumetric method for building complex models
+from range images. \emph{SIGGRAPH}, 1996.
+
+\bibitem{newcombe2011} R.~A. Newcombe et al. KinectFusion: real-time dense surface mapping and
+tracking. \emph{ISMAR}, 2011.
+
+\bibitem{lorensen1987} W.~E. Lorensen, H.~E. Cline. Marching cubes: a high resolution 3D surface
+construction algorithm. \emph{SIGGRAPH}, 1987.
+
+\bibitem{taubin1995} G.~Taubin. Curve and surface smoothing without shrinkage. \emph{ICCV}, 1995.
+
+\bibitem{garland1997} M.~Garland, P.~S. Heckbert. Surface simplification using quadric error
+metrics. \emph{SIGGRAPH}, 1997.
+
+\bibitem{kazhdan2013} M.~Kazhdan, H.~Hoppe. Screened Poisson surface reconstruction. \emph{ACM
+Transactions on Graphics}, 2013.
+
+\bibitem{huber1964} P.~J. Huber. Robust estimation of a location parameter. \emph{Annals of
+Mathematical Statistics}, 1964.
+
+\bibitem{umeyama1991} S.~Umeyama. Least-squares estimation of transformation parameters between
+two point patterns. \emph{IEEE Transactions on Pattern Analysis and Machine Intelligence}, 1991.
+
+\bibitem{loopclosure} \code{meshprod} issue: Loop closure / pose-graph optimization for
+incremental SfM. \url{https://github.com/kornia/kornia-rs/issues/1365}.
+
+\end{thebibliography}
+
+\end{document}

@@ -900,9 +900,9 @@ const SLIDES = [
   {
     kicker: "01",
     title: "meshprod",
-    body: `<p><strong>One video in, one measured mesh out.</strong></p>
-      <p>Sparse structure-from-motion → dense multi-view stereo → fusion → surface → simplification.</p>`,
-    chips: ["22–140 views · 2.0 px RMSE", "4.9k–87k faces", "about 1–3 min", "deterministic"],
+    body: `<p><strong>One video in, one measured mesh out.</strong> A single hand-held orbit of an object becomes a coloured, simplified triangle mesh — with every number in the report measured, not guessed.</p>
+      <p>Classical geometry only — sparse SfM → dense multi-view stereo → volumetric fusion → surface → simplification. No learned model; deterministic and reproducible.</p>`,
+    chips: ["22–140 views · 2.0 px RMSE", "4.9k–87k faces", "≈1–3 min per run", "byte-identical reruns", "13 named failure codes"],
     figure: svg(`
       <g stroke="${GOLD}" stroke-width="2.6" opacity="0.95">
         <path d="M200 60 320 128 200 196 80 128Z"/><path d="M80 128v92l120 68 120-68v-92"/>
@@ -916,8 +916,9 @@ const SLIDES = [
   {
     kicker: "02",
     title: "One pipeline, nine stages",
-    body: `<p>Sparse stages are cheap; dense depth dominates the runtime. Every stage logs its timing and names its failures.</p>`,
-    chips: ["decode → features → match", "verify → tracks → sparse", "dense → fusion → mesh"],
+    body: `<p>Nine stages, each logging its timing and a named failure. The sparse front-end is cheap; <strong>dense depth dominates</strong> (about half the runtime on a 720p clip).</p>
+      <p>decode → features → match → verify → tracks → sparse → dense → fusion → mesh</p>`,
+    chips: ["decode ≈ 23 s", "dense ≈ 25 s", "full run ≈ 55 s", "SIFT · PnP · BA"],
     figure: svg(`
       <g stroke="${GOLD}" stroke-width="1.6" class="flow-line" fill="none">
         <path d="M14 70h302M14 160h302M14 250h302"/>
@@ -934,8 +935,8 @@ const SLIDES = [
   {
     kicker: "03",
     title: "Sparse: where the cameras are",
-    body: `<p>SIFT keypoints, mutual nearest neighbours and epipolar RANSAC, then incremental SfM: PnP registration, triangulation and bundle adjustment.</p>`,
-    chips: ["157k matches", "RMSE 2.0 px", "140 views on the stand clip"],
+    body: `<p><strong>SIFT</strong> keypoints, mutual nearest neighbours + <strong>Lowe ratio</strong>, then <strong>epipolar RANSAC</strong> to kill false matches. Incremental SfM registers views with <strong>EPnP + SPRT</strong>, triangulates, and refines with robust <strong>bundle adjustment</strong>.</p>`,
+    chips: ["RMSE ≈ 2.0 px", "22–140 registered views", "seeded PnP (deterministic)", "Huber/Cauchy BA"],
     figure: svg(`
       <g fill="${GOLD}">${Array.from({length: 40}, (_, i) =>
         `<circle cx="${120 + (i * 61) % 160}" cy="${80 + (i * 43) % 170}" r="3"/>`).join("")}</g>
@@ -950,8 +951,8 @@ const SLIDES = [
   {
     kicker: "04",
     title: "Dense: every pixel votes",
-    body: `<p>Inverse-depth planes are swept per view. Census compares intensity orderings, SGM adds a smoothness prior, and sub-pixel refinement sharpens the winner.</p>`,
-    chips: ["median 4–9 % depth error", "SGM fills flat regions"],
+    body: `<p><strong>Plane sweep</strong> tests inverse-depth hypotheses per pixel. <strong>NCC</strong> is robust to lighting, <strong>Census</strong> compares intensity orderings, <strong>SGM</strong> adds a smoothness prior (fills flat regions), and a parabola fit sharpens the winner to sub-pixel. Left–right consistency rejects uncertain pixels.</p>`,
+    chips: ["median 4–9 % depth error", "p90 22–56 %", "SGM: 30 → 2 patches", "sub-pixel refinement"],
     figure: svg(`
       <g stroke="${STEEL}" stroke-width="1.6" opacity="0.7">
         ${[90, 130, 170, 210, 250].map((y) => `<path d="M40 ${y}h320"/>`).join("")}
@@ -965,8 +966,8 @@ const SLIDES = [
   {
     kicker: "05",
     title: "Votes become a surface",
-    body: `<p>TSDF fusion, marching tetrahedra, Taubin and bilateral smoothing, then quadric error metrics spend the face budget where the shape bends.</p>`,
-    chips: ["87k → 22k faces", "20–33 patches", "Euler −97 … −233"],
+    body: `<p><strong>TSDF fusion</strong> (Curless–Levoy) turns depth maps into a signed distance field; <strong>marching tetrahedra</strong> extracts the surface; <strong>Taubin</strong> smooths without shrinking; <strong>bilateral</strong> keeps creases; <strong>quadric error metrics</strong> spend the face budget where the shape bends.</p>`,
+    chips: ["87k → 22k faces", "20–33 patches", "Euler −97 … −233", "isolate: 49 → 1 patch"],
     figure: svg(`
       <g stroke="${STEEL}" stroke-width="1.3" fill="none">
         ${Array.from({length: 4}, (_, r) => Array.from({length: 4}, (_, c) =>
@@ -981,8 +982,8 @@ const SLIDES = [
   {
     kicker: "06",
     title: "Trust is a number",
-    body: `<p>Every run writes a report: mesh-quality pack, provenance hash, resource use and a self-assessment confidence. Failures carry a stable code and hints.</p>`,
-    chips: ["sha256 provenance", "13 failure codes", "confidence 0.55–0.61"],
+    body: `<p>Every run writes a <strong>report</strong>: views, points, reprojection RMSE, depth error percentiles, mesh topology (patches, Euler), provenance (video sha256, exact argv), peak memory, and a <strong>self-assessment</strong> confidence. Failures carry a stable code and actionable hints.</p>`,
+    chips: ["sha256 provenance", "13 failure codes", "depth-vs-sparse check", "self-assessment verdict"],
     figure: svg(`
       <g stroke="${STEEL}" stroke-width="6" fill="none" opacity="0.35">
         <circle cx="200" cy="170" r="90"/>
@@ -997,8 +998,8 @@ const SLIDES = [
   {
     kicker: "07",
     title: "What breaks, and why",
-    body: `<p>Specular metal, textureless plastic, panning without parallax, thin one-sided objects. Each failure is detectable before the mesh is.</p>`,
-    chips: ["texture the surface", "texture the support", "second elevation pass"],
+    body: `<p><strong>Specular</strong> metal, <strong>textureless</strong> plastic, <strong>panning</strong> without parallax, thin one-sided objects — each is detectable before the mesh (low keypoints, low registration, empty TSDF). The fix is capture-side, plus <strong>foreground isolation</strong> to drop the table and background.</p>`,
+    chips: ["fill the frame", "add texture & diffuse light", "real orbit, not pan", "isolate the object"],
     figure: svg(`
       <g stroke="${STEEL}" stroke-width="1.8" fill="none">
         <rect x="30" y="90" width="100" height="130" rx="10"/>
@@ -1018,8 +1019,9 @@ const SLIDES = [
     kicker: "08",
     title: "Credits",
     body: `<p><strong>Adarsh Gupta</strong> · IIIT Gwalior</p>
-      <p>Built on kornia-rs, three.js, Blender, Open3D and GStreamer. MIT. AI-assisted; every number comes from a measured run.</p>`,
-    chips: ["github.com/AdarshGuptaa/meshprod", "MIT", "reproducible"],
+      <p>Built on kornia-rs (SfM, calibration, geometry), three.js (viewer), GStreamer (decode), Blender/Open3D (comparison). MIT. AI-assisted; every number comes from a measured run.</p>
+      <p>Key methods: SIFT (Lowe), plane-sweep + SGM (Collins, Hirschmüller), TSDF (Curless–Levoy), QEM (Garland–Heckbert), Zhang/EPnP (Zhang, Lepetit).</p>`,
+    chips: ["github.com/AdarshGuptaa/meshprod", "MIT", "reproducible", "22 cited references"],
     figure: svg(`
       <g stroke="${GOLD}" stroke-width="2" fill="none">
         <circle cx="200" cy="170" r="86"/><circle cx="200" cy="170" r="60" opacity="0.55"/>

@@ -7,3 +7,9 @@
 
 /web_runs
 /.meshprod-cache
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.toc
