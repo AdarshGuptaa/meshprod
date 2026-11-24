@@ -8,6 +8,18 @@ phone MP4 ─► frames ─► sparse SfM ─► dense depth ─► TSDF fusion 
              (done)       (done)        (done)          (done)          (done)         (done)
 ```
 
+## Example
+
+| Input: one frame of the phone video | Output: reconstructed mesh (`.ply`) |
+|---|---|
+| ![swiss knife input frame](docs/demo/swiss_knife_input.jpg) | ![swiss knife output mesh](docs/demo/swiss_knife_output.jpg) |
+
+`swiss_knife.mp4` (1280×720, 628 frames) run with `--isolate-object`: 39 of 126
+views registered, 2.41 px reprojection RMSE, 3.4 % median depth error, and a
+10,287-face mesh in a single connected patch (Euler −14). The mesh is shown from
+its flat handle side; the ribbed mat the knife stands on is part of the fused
+scene.
+
 ## Status
 
 | Stage | State |
